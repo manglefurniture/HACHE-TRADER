@@ -13,6 +13,7 @@ from .observer import MarketObserver
 from .safetrade import SafeTrade
 from .store import Store
 from .telegram import Channel, TelegramAPI, read_secret
+from .telegram_health import record_telegram_failure, record_telegram_recovery
 
 
 def main():
@@ -103,10 +104,13 @@ def main():
                         if channel:
                             try:
                                 channel.poll(int(time.time()))
-                            except GuardError:
-                                # Telegram outages must always disable new
-                                # simulated entries until explicit owner resume.
-                                store.control("pause", int(time.time()))
+                            except GuardError as exc:
+                                # Remain fail-closed, but record one transition
+                                # per outage rather than a pause every 2 seconds.
+                                # These codes never include URLs or tokens.
+                                record_telegram_failure(store, int(time.time()), str(exc))
+                            else:
+                                record_telegram_recovery(store, int(time.time()))
                         if observer is not None and int(time.time()) >= next_observation:
                             observed = observer.cycle()
                             next_observation = int(time.time()) + 180
