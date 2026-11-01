@@ -155,7 +155,13 @@ class Worker:
             s["last_cycle"], s["last_error"], s["markets"] = now, None, statuses
             self.store.save(s, "scan_completed", {"universe": len(universe), "analyzed": batch}, now)
         s = self.store.read()
-        if candidates and not had_position_at_start and not s["position"] and not s["paused"] and not s["emergency"] and not self.engine.kill_file.exists():
+        entries_today = sum(
+            1 for o in s["orders"].values()
+            if o["side"] == "buy" and local_day(o["created"]) == local_day(now)
+        )
+        if (candidates and entries_today < 3 and not had_position_at_start
+                and not s["position"] and not s["paused"] and not s["emergency"]
+                and not self.engine.kill_file.exists()):
             _, market, _, candles = max(candidates, key=lambda x: (x[0], x[1].id))
             # Revalidate the winning market after the batch; never execute old depth.
             stamp, volume = self.api.ticker(market.id)

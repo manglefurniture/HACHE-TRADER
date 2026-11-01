@@ -32,6 +32,14 @@ class PaperEngine:
                 raise GuardError("active_order_exists")
             reserve = money(0)
             if side == "buy":
+                # Hard ceiling independent of policy/config: protect the $50
+                # paper trial from repeated intraday entry attempts.
+                entries_today = sum(
+                    1 for o in s["orders"].values()
+                    if o["side"] == "buy" and local_day(o["created"]) == local_day(now)
+                )
+                if entries_today >= 3:
+                    raise GuardError("paper_daily_entry_limit")
                 if self.kill_file.exists() or s["paused"] or s["emergency"] or s["last_error"]:
                     raise GuardError("entries_blocked")
                 if not 0 <= now - s["last_cycle"] <= 120:

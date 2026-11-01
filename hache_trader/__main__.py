@@ -16,7 +16,7 @@ from .telegram import Channel, TelegramAPI, read_secret
 
 def main():
     parser = argparse.ArgumentParser(description="HACHE-TRADER — SIMULACIÓN únicamente")
-    parser.add_argument("command", choices=["init", "serve", "observe", "observe-once", "run", "scan", "status", "pause", "resume", "emergency", "reconcile", "backup", "policy", "diagnose"])
+    parser.add_argument("command", choices=["init", "serve", "observe", "observe-once", "trial", "run", "scan", "status", "pause", "resume", "emergency", "reconcile", "backup", "policy", "diagnose"])
     parser.add_argument("--state-dir", default="runtime")
     parser.add_argument("--policy")
     parser.add_argument("--destination")
@@ -59,12 +59,16 @@ def main():
             if dest.exists() or dest == root / "ledger.sqlite":
                 raise GuardError("backup_refuses_overwrite")
             store.backup(dest)
-        elif args.command in ("serve", "observe", "observe-once", "run", "scan"):
+        elif args.command in ("serve", "observe", "observe-once", "trial", "run", "scan"):
             with ProcessLock(root / "worker.lock"):
                 store.reconcile(now)
-                if args.command in ("serve", "observe") and not args.telegram:
+                if args.command in ("serve", "observe", "trial") and not args.telegram:
                     raise GuardError("telegram_required")
-                worker = Worker(store, policy, SafeTrade(), root / "STOP") if args.command in ("run", "scan") else None
+                if args.command == "trial" and os.environ.get("HACHE_TRADER_ENABLE_PAPER_TRIAL") != "EXPLICIT_SIMULATION_ONLY":
+                    raise GuardError("paper_trial_not_enabled")
+                # Reconciling at startup always pauses new paper entries. Only
+                # an authenticated Telegram confirmation can re-enable them.
+                worker = Worker(store, policy, SafeTrade(), root / "STOP") if args.command in ("run", "scan", "trial") else None
                 observer = MarketObserver(store, policy, SafeTrade()) if args.command in ("observe", "observe-once") else None
                 channel = None
                 if args.telegram:
@@ -77,7 +81,7 @@ def main():
                         raise GuardError("independent_bot_identity_mismatch")
                     channel = Channel(store, tg, int(os.environ["HACHE_TRADER_CHAT_ID"]), int(os.environ["HACHE_TRADER_USER_ID"]), policy,
                                       allow_resume=args.command not in ("observe", "serve"),
-                                      runtime_mode=args.command if args.command in ("observe", "serve") else "paper")
+                                      runtime_mode=args.command if args.command in ("observe", "serve", "trial") else "paper")
                 next_observation = 0
                 while True:
                     success = False

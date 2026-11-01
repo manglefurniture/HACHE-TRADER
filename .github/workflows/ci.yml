@@ -24,6 +24,7 @@ jobs:
         run: |
           bash -n deployment/install-telegram-paper.sh
           bash -n deployment/upgrade-telegram-observer.sh
+          bash -n deployment/upgrade-telegram-trial.sh
 
       - name: Compile source and tests
         run: python3 -m compileall -q hache_trader tests

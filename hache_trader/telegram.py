@@ -90,9 +90,9 @@ class Channel:
         if any(type(x) is not int or x <= 0 for x in (chat_id, user_id)):
             raise GuardError("owner_ids_required")
         self.store, self.api, self.chat, self.user, self.policy = store, api, chat_id, user_id, policy
-        if runtime_mode not in ("paper", "observe", "serve"):
+        if runtime_mode not in ("paper", "observe", "serve", "trial"):
             raise GuardError("invalid_runtime_mode")
-        self.allow_resume = allow_resume and runtime_mode == "paper"
+        self.allow_resume = allow_resume and runtime_mode in ("paper", "trial")
         self.runtime_mode = runtime_mode
 
     def process(self, update, now):
