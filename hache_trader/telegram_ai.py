@@ -81,7 +81,7 @@ def classify_question(raw):
             break
     intents = (
         ("profit", ("ganad", "gananc", "perdid", "perdid", "resultado", "balance", "comision", "rentab", "beneficio")),
-        ("rejection", ("descart", "rechaz", "evitad", "bitcoin", "btc")),
+        ("rejection", ("descart", "rechaz", "evitad")),
         ("blocked", ("impid", "bloque", "paus", "problema", "fren", "deten", "obstacul")),
         ("no_buys", ("no has comprado", "no compras", "sin comprar", "no ha comprado", "no oper", "ninguna compra")),
         ("mistakes", ("error", "fallo", "equivoc", "mal hic")),
@@ -92,7 +92,7 @@ def classify_question(raw):
     for intent, words in intents:
         if any(w in normalized for w in words):
             return intent, market
-    return None
+    return ("markets", market) if market else None
 
 
 def initialize(db):
@@ -147,7 +147,8 @@ def _evidence(store, intent, market, now):
     age = now - s["last_cycle"] if s["last_cycle"] else None
     fresh = age is not None and 0 <= age <= 180
     statuses = []
-    for item in (s.get("markets") or [])[:50]:
+    # A requested symbol may be beyond the first 50 sorted markets.
+    for item in (s.get("markets") or []):
         ident, status = item.get("market"), item.get("status")
         if (isinstance(ident, str) and re.fullmatch(r"[a-z0-9]{3,40}", ident)
                 and isinstance(status, str) and len(status) <= 120):
