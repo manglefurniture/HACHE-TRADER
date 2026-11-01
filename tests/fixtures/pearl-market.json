@@ -1,0 +1,17 @@
+{
+  "id": "pearlusdt",
+  "symbol": "pearlusdt",
+  "name": "PEARL/USDT",
+  "base_unit": "pearl",
+  "quote_unit": "usdt",
+  "amount_precision": 4,
+  "price_precision": 2,
+  "total_precision": 4,
+  "min_price": "0.01",
+  "max_price": "100000",
+  "min_amount": "2",
+  "position": 5,
+  "state": "enabled",
+  "created_at": "2026-10-18T16:53:27Z",
+  "updated_at": "2026-10-18T17:53:09Z"
+}

@@ -1,0 +1,14 @@
+{
+  "id": "pearlusdt",
+  "name": "PEARL/USDT",
+  "base_unit": "pearl",
+  "quote_unit": "usdt",
+  "avg_price": "1.46",
+  "high": "1.55",
+  "last": "1.45",
+  "low": "1.4",
+  "open": "1.52",
+  "price_change_percent": "-4.61%",
+  "volume": "2022180.03884398",
+  "amount": "1388738.6729"
+}
