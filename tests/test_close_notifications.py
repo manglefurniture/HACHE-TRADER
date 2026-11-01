@@ -107,6 +107,29 @@ class CloseAlertTests(unittest.TestCase):
         self.assertIn("Neto individual no disponible", text)
         self.assertNotIn("Ganancia:", text)
 
+    def test_closing_alert_is_delivered_before_routine_queue(self):
+        self.buy()
+        with self.store.transaction():
+            for n in range(12):
+                self.store.enqueue("routine:" + str(n), {"text": "Reporte rutinario " + str(n)})
+        self.sell()
+        sent = []
+
+        class Bot:
+            def call(_, method, body):
+                sent.append(body)
+                return {"message_id": 100 + len(sent)}
+
+        channel = Channel(self.store, Bot(), 424242, 424242, self.policy,
+                          runtime_mode="trial")
+        channel.flush(NOW+2)
+        self.assertEqual(len(sent), 10)
+        self.assertIn("Posición CERRADA: ABC/USDT", sent[0]["text"])
+        self.assertEqual(self.alerts()[0]["sent"], 1)
+        channel.flush(NOW+2)
+        self.assertEqual(len(sent), 13)
+        self.assertEqual(sum("Posición CERRADA" in body["text"] for body in sent), 1)
+
     def test_alert_survives_restart_and_sends_only_to_owner_chat(self):
         self.buy()
         self.sell()
