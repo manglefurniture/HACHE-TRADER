@@ -66,8 +66,16 @@ def main():
                     raise GuardError("telegram_required")
                 if args.command == "trial" and os.environ.get("HACHE_TRADER_ENABLE_PAPER_TRIAL") != "EXPLICIT_SIMULATION_ONLY":
                     raise GuardError("paper_trial_not_enabled")
-                # Reconciling at startup always pauses new paper entries. Only
-                # an authenticated Telegram confirmation can re-enable them.
+                # Reconciliation pauses all orders. The previous observer's
+                # fresh last_cycle MUST NOT count as a healthy trading cycle:
+                # force a new trial Worker scan before /reanudar can succeed.
+                if args.command == "trial":
+                    with store.transaction():
+                        state = store.read()
+                        state["last_cycle"] = 0
+                        state["paused"] = True
+                        store.save(state, "trial_started_awaiting_fresh_scan", {}, now)
+                # Only owner-confirmed Telegram controls may re-enable paper buys.
                 worker = Worker(store, policy, SafeTrade(), root / "STOP") if args.command in ("run", "scan", "trial") else None
                 observer = MarketObserver(store, policy, SafeTrade()) if args.command in ("observe", "observe-once") else None
                 channel = None
