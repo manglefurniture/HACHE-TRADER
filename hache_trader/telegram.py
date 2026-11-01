@@ -11,6 +11,7 @@ import urllib.request
 from .domain import GuardError, canonical
 from .reports import render
 from .safetrade import NoRedirect
+from .telegram_ai import classify_question, queue_question
 
 READ = frozenset(("start", "estado", "saldo", "mercados", "posiciones", "historial", "ganancias", "diario", "semanal", "riesgo", "ayuda"))
 
@@ -81,14 +82,14 @@ class TelegramAPI:
 
 
 def menu(*, allow_resume=True):
-    actions = ["estado", "saldo", "mercados", "posiciones", "historial", "ganancias", "riesgo", "pausar", "emergencia", "diario", "semanal"]
+    actions = ["estado", "saldo", "mercados", "posiciones", "historial", "ganancias", "riesgo", "pausar", "emergencia", "diario", "semanal", "ia"]
     if allow_resume:
         actions.insert(actions.index("emergencia"), "reanudar")
     return {"inline_keyboard": [[{"text": a.capitalize(), "callback_data": "menu:" + a} for a in actions[i:i+2]] for i in range(0, len(actions), 2)]}
 
 
 class Channel:
-    def __init__(self, store, api, chat_id, user_id, policy, *, allow_resume=True, runtime_mode="paper"):
+    def __init__(self, store, api, chat_id, user_id, policy, *, allow_resume=True, runtime_mode="paper", ai_enabled=False):
         if any(type(x) is not int or x <= 0 for x in (chat_id, user_id)):
             raise GuardError("owner_ids_required")
         self.store, self.api, self.chat, self.user, self.policy = store, api, chat_id, user_id, policy
@@ -96,6 +97,7 @@ class Channel:
             raise GuardError("invalid_runtime_mode")
         self.allow_resume = allow_resume and runtime_mode in ("paper", "trial")
         self.runtime_mode = runtime_mode
+        self.ai_enabled = bool(ai_enabled) and runtime_mode == "trial"
 
     def process(self, update, now):
         if type(update) is not dict or type(update.get("update_id")) is not int or not 0 <= update["update_id"] < 2**63:
@@ -118,8 +120,9 @@ class Channel:
             if not authorized:
                 return "ignored"
             action = callback.get("data", "") if callback else message.get("text", "")
-            if not isinstance(action, str) or len(action) > 100:
+            if not isinstance(action, str) or len(action) > 200:
                 return "ignored"
+            raw_action = action
             # Ignore forwarded messages and stale text commands.
             if not callback and (message.get("forward_origin") or type(message.get("date")) is not int or not 0 <= now-message["date"] <= 300):
                 return "ignored"
@@ -150,6 +153,17 @@ class Channel:
                     self.store.db.execute("UPDATE confirmations SET used=1 WHERE nonce=?", (nonce,))
             elif action in READ:
                 text = render(self.store, action, now, self.policy, runtime_mode=self.runtime_mode)
+            elif action == "ia":
+                text = ("SIMULACIÓN · Soy HACHE Trader con análisis OpenAI. "
+                        "Pregunta por mercados, oportunidades, descartes, ganancias, "
+                        "errores o por qué no hubo compras. "
+                        "Solo consultas informativas; las acciones requieren botones.")
+            elif self.ai_enabled and not callback and not raw_action.startswith("/"):
+                classified = classify_question(raw_action)
+                text = (queue_question(self.store, ident, classified, now)
+                        if classified else
+                        "SIMULACIÓN · Puedo explicar mercados, ganancias y decisiones ficticias. "
+                        "Escribe /ia para ejemplos. No ejecuto instrucciones en lenguaje natural.")
             else:
                 text = render(self.store, "ayuda", now, self.policy, runtime_mode=self.runtime_mode)
             markup = {"inline_keyboard": [[{"text": "Confirmar simulación", "callback_data": "resume:"+confirmation}]]} if confirmation else menu(allow_resume=self.allow_resume)
