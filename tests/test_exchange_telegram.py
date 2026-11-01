@@ -61,6 +61,24 @@ class AdapterContractTests(unittest.TestCase):
         self.assertEqual(len(called), 1)
 
 
+class TelegramTimeoutTests(unittest.TestCase):
+    def test_non_long_poll_uses_bounded_network_timeout(self):
+        from hache_trader.telegram import TelegramAPI
+        calls = []
+
+        def transport(req, timeout):
+            calls.append((req.full_url.rsplit("/", 1)[-1], timeout))
+            return Response([] if req.full_url.endswith("/getUpdates")
+                            else {"message_id": 999})
+
+        api = TelegramAPI("123456789:NOT_A_REAL_TOKEN_FOR_LOCAL_TEST_ONLY",
+                          transport=transport, clock=lambda: NOW)
+        self.assertEqual(api.call("getUpdates", {"offset": 0, "timeout": 0}), [])
+        self.assertEqual(api.call("sendMessage", {"chat_id": 42, "text": "test"}),
+                         {"message_id": 999})
+        self.assertEqual(calls, [("getUpdates", 10), ("sendMessage", 15)])
+
+
 class TelegramContractTests(unittest.TestCase):
     def setUp(self):
         self.temp = tempfile.TemporaryDirectory()
