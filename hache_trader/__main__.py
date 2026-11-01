@@ -16,7 +16,7 @@ from .telegram import Channel, TelegramAPI, read_secret
 
 def main():
     parser = argparse.ArgumentParser(description="HACHE-TRADER — SIMULACIÓN únicamente")
-    parser.add_argument("command", choices=["init", "serve", "observe", "run", "scan", "status", "pause", "resume", "emergency", "reconcile", "backup", "policy", "diagnose"])
+    parser.add_argument("command", choices=["init", "serve", "observe", "observe-once", "run", "scan", "status", "pause", "resume", "emergency", "reconcile", "backup", "policy", "diagnose"])
     parser.add_argument("--state-dir", default="runtime")
     parser.add_argument("--policy")
     parser.add_argument("--destination")
@@ -59,13 +59,13 @@ def main():
             if dest.exists() or dest == root / "ledger.sqlite":
                 raise GuardError("backup_refuses_overwrite")
             store.backup(dest)
-        elif args.command in ("serve", "observe", "run", "scan"):
+        elif args.command in ("serve", "observe", "observe-once", "run", "scan"):
             with ProcessLock(root / "worker.lock"):
                 store.reconcile(now)
                 if args.command in ("serve", "observe") and not args.telegram:
                     raise GuardError("telegram_required")
                 worker = Worker(store, policy, SafeTrade(), root / "STOP") if args.command in ("run", "scan") else None
-                observer = MarketObserver(store, policy, SafeTrade()) if args.command == "observe" else None
+                observer = MarketObserver(store, policy, SafeTrade()) if args.command in ("observe", "observe-once") else None
                 channel = None
                 if args.telegram:
                     creds = Path(os.environ.get("CREDENTIALS_DIRECTORY", "credentials"))
@@ -86,8 +86,12 @@ def main():
                         except GuardError:
                             store.control("pause", int(time.time()))
                     if observer is not None and int(time.time()) >= next_observation:
-                        observer.cycle()
+                        observed = observer.cycle()
                         next_observation = int(time.time()) + 180
+                        if args.command == "observe-once":
+                            if not observed:
+                                raise GuardError("observer_failed_closed")
+                            break
                     if worker is not None:
                         success = worker.cycle()
                     if args.command == "scan":
