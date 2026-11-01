@@ -19,7 +19,7 @@ class DeploymentTemplateTests(unittest.TestCase):
         ):
             self.assertIn(required, service)
         for forbidden in ("User=root", "ExecStartPre=/bin/sh", "--live", "API_SECRET=",
-                          "StrictHostKeyChecking=no", "withdraw"):
+                          "StrictHostKeyChecking=no", "ExecStart=/usr/bin/curl"):
             self.assertNotIn(forbidden, service)
 
     def test_only_one_service_polls_telegram(self):
