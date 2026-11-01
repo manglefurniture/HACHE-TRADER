@@ -6,7 +6,7 @@ import tempfile
 import unittest
 
 from hache_trader import ai_shadow
-from hache_trader.domain import GuardError
+from hache_trader.domain import GuardError, Book as RealBook
 
 
 class Book:
@@ -113,10 +113,12 @@ class ShadowTests(unittest.TestCase):
         class ReceiptAPI(MarketAPI):
             received_at = ShadowTests.NOW + 3
             def book(self, market):
-                class ReceiptBook(Book):
-                    def fresh(self, now, max_age):
-                        assert now == ReceiptAPI.received_at
-                return ReceiptBook()
+                # Actual deterministic Book rejects a timestamp in the future
+                # relative to the clock captured before several SafeTrade GETs.
+                return RealBook(
+                    market, self.received_at,
+                    ((ai_shadow.money("99"), ai_shadow.money("2")),),
+                    ((ai_shadow.money("100"), ai_shadow.money("3")),), 1)
         self.assertEqual(
             ai_shadow.collect_public_snapshot(ReceiptAPI(), now=self.NOW)["markets"][0]["market"],
             "btcusdt")
