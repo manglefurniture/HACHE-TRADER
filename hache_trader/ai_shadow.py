@@ -220,6 +220,15 @@ def run_once(db_path, credential_dir, *, api=None, clock=time.time, transport=No
             input_tokens INTEGER NOT NULL DEFAULT 0, output_tokens INTEGER NOT NULL DEFAULT 0,
             total_tokens INTEGER NOT NULL DEFAULT 0)""")
         db.execute("BEGIN IMMEDIATE")
+        # Re-running an existing six-hour slot is an expected no-op, not
+        # a provider failure. Preserve the prior audit row and its usage.
+        # Check this BEFORE quotas so a manual duplicate never becomes red.
+        existing = db.execute(
+            "SELECT status,total_tokens FROM runs WHERE slot=?", (slot,)
+        ).fetchone()
+        if existing:
+            return {"status": "skipped_existing_slot", "previous_status": existing[0],
+                    "previous_total_tokens": existing[1], "new_api_calls": 0}
         query = """SELECT COUNT(*),
                    COALESCE(SUM(CASE WHEN total_tokens=0 THEN 1000 ELSE total_tokens END),0)
                    FROM runs WHERE observed_at>=?"""
@@ -228,8 +237,6 @@ def run_once(db_path, credential_dir, *, api=None, clock=time.time, transport=No
         if (daily[0] >= MAX_DAILY_CALLS or daily[1] + 1000 > MAX_DAILY_TOKENS
                 or monthly[0] >= MAX_MONTHLY_CALLS or monthly[1] + 1000 > MAX_MONTHLY_TOKENS):
             raise GuardError("openai_local_budget_exhausted")
-        if db.execute("SELECT 1 FROM runs WHERE slot=?", (slot,)).fetchone():
-            raise GuardError("shadow_slot_already_attempted")
         db.execute("INSERT INTO runs(slot,observed_at,snapshot,status) VALUES(?,?,?,?)",
                    (slot, now, "{}", "reserved"))
         db.commit()  # idempotency and quota reservation BEFORE network I/O
