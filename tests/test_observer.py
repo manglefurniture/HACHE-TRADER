@@ -14,8 +14,9 @@ from test_core import NOW, book, candles
 
 
 class MarketStub:
-    def __init__(self, missing=False, failure=False):
+    def __init__(self, missing=False, failure=False, fee_only=None):
         self.missing, self.failure = missing, failure
+        self.fee_only = fee_only
         self.calls = []
 
     def get(self, path, query=None):
@@ -23,7 +24,9 @@ class MarketStub:
         if self.failure and path.endswith("trading_fees"):
             raise GuardError("safetrade_http_429")
         if path.endswith("trading_fees"):
-            return [{"market_id": "any", "taker": "0.001"}]
+            if self.fee_only == "empty":
+                return []
+            return [{"market_id": self.fee_only or "any", "taker": "0.001"}]
         if path.endswith("tickers"):
             return {x: {"volume": "25000"} for x in ("abcusdt", "defusdt")}
         raise AssertionError(path)
@@ -86,6 +89,29 @@ class ObserverTests(unittest.TestCase):
         self.assertIn("safetrade_http_404", data["markets"][0]["status"])
         self.assertIsNone(data["last_error"])
         self.assertEqual(data["observer_state"], "solo lectura")
+
+    def test_fee_missing_in_one_pair_skips_only_that_pair(self):
+        api = MarketStub(fee_only="defusdt")
+        observer = MarketObserver(self.store, self.policy, api,
+                                  clock=lambda: NOW, batch_size=2)
+        self.assertTrue(observer.cycle())
+        data = self.store.read()
+        self.assertEqual([m["market"] for m in data["markets"]],
+                         ["abcusdt", "defusdt"])
+        self.assertIn("fee_unknown", data["markets"][0]["status"])
+        self.assertNotIn("fee_unknown", data["markets"][1]["status"])
+        self.assertEqual(data["observer_offset"], 0)
+        self.assertIsNone(data["last_error"])
+        self.assertTrue(data["paused"])
+
+    def test_entire_fee_catalog_absent_causes_fail_closed(self):
+        api = MarketStub(fee_only="empty")
+        observer = MarketObserver(self.store, self.policy, api, clock=lambda: NOW)
+        self.assertFalse(observer.cycle())
+        state = self.store.read()
+        self.assertEqual(state["last_error"], "observer_market_data_unavailable")
+        self.assertEqual(state["cash"], "50")
+        self.assertEqual(state["orders"], {})
 
     def test_exchange_outage_preserves_capital_and_blocks_entries(self):
         api = MarketStub(failure=True)
