@@ -13,6 +13,7 @@ from .observer import MarketObserver
 from .safetrade import SafeTrade
 from .store import Store
 from .telegram import Channel, TelegramAPI, read_secret
+from .telegram_ai import AIAnswerLoop, initialize as initialize_telegram_ai
 from .telegram_health import record_telegram_failure, record_telegram_recovery
 
 
@@ -82,6 +83,9 @@ def main():
                 market_loop = TrialMarketLoop(root / "ledger.sqlite", policy, SafeTrade(), root / "STOP") if args.command == "trial" else None
                 observer = MarketObserver(store, policy, SafeTrade()) if args.command in ("observe", "observe-once") else None
                 channel = None
+                ai_loop = None
+                if args.command == "trial":
+                    initialize_telegram_ai(store.db)
                 if args.telegram:
                     creds = Path(os.environ.get("CREDENTIALS_DIRECTORY", "credentials"))
                     tg = TelegramAPI(read_secret(creds / "telegram_token"))
@@ -92,10 +96,15 @@ def main():
                         raise GuardError("independent_bot_identity_mismatch")
                     channel = Channel(store, tg, int(os.environ["HACHE_TRADER_CHAT_ID"]), int(os.environ["HACHE_TRADER_USER_ID"]), policy,
                                       allow_resume=args.command not in ("observe", "serve"),
-                                      runtime_mode=args.command if args.command in ("observe", "serve", "trial") else "paper")
+                                      runtime_mode=args.command if args.command in ("observe", "serve", "trial") else "paper",
+                                      ai_enabled=args.command == "trial")
+                    if args.command == "trial":
+                        ai_loop = AIAnswerLoop(root / "ledger.sqlite", policy, creds)
                 next_observation = 0
                 if market_loop is not None:
                     market_loop.start()
+                if ai_loop is not None:
+                    ai_loop.start()
                 try:
                     while True:
                         if market_loop is not None:
@@ -126,6 +135,8 @@ def main():
                             break
                         time.sleep(2 if market_loop is not None else (5 if worker is None else 30))
                 finally:
+                    if ai_loop is not None:
+                        ai_loop.close()
                     if market_loop is not None:
                         market_loop.close()
         print(json.dumps(report(store, int(time.time())), ensure_ascii=False, indent=2))
