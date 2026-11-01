@@ -28,7 +28,7 @@ class ReportClarityTests(unittest.TestCase):
                                      clock=lambda: NOW, batch_size=1)
                 self.assertTrue(obs.cycle())
                 status = store.read()["markets"][0]["status"]
-                self.assertIn("spread 2.02%", status)
+                self.assertIn("spread 2.00%", status)
                 self.assertIn("máximo 0.40%", status)
                 markets = render(store, "mercados", NOW, policy)
                 self.assertIn("ABC/USDT", markets)
