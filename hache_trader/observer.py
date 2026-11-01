@@ -91,7 +91,8 @@ class MarketObserver:
                 if book.market != ident:
                     raise GuardError("wrong_market_depth")
                 if book.spread > money(self.policy.max_spread):
-                    message = "spread demasiado amplio"
+                    message = (f"spread {book.spread * 100:.2f}% "
+                               f"(máximo {money(self.policy.max_spread) * 100:.2f}%)")
                 else:
                     found = signals(candles, int(self.clock()))
                     if not found:
