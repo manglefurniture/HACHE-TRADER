@@ -43,7 +43,10 @@ class DeploymentTemplateTests(unittest.TestCase):
         ):
             self.assertIn(required, unit)
         self.assertNotIn("hache_trader observe --telegram --state-dir", unit)
-        self.assertIn("previous_unit_not_readonly_observer", upgrade)
+        self.assertIn("previous_unit_not_authorized_paper_service", upgrade)
+        self.assertIn("previous_mode=observe", upgrade)
+        self.assertIn("previous_mode=trial", upgrade)
+        self.assertIn("HACHE_TRADER_ENABLE_PAPER_TRIAL=EXPLICIT_SIMULATION_ONLY", upgrade)
         self.assertIn("hache_trader trial --telegram", upgrade)
         self.assertIn("sha256sum --check --status", upgrade)
         self.assertIn("LEDGER_BACKUP_OK", upgrade)
