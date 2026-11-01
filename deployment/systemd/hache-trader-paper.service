@@ -1,0 +1,41 @@
+# Template only. NOT installed or enabled by this commit.
+# Requires a reviewed release checked out from GitHub under /opt/hache-trader/current.
+# No bot token, private API keys, trading permissions, or withdrawal methods.
+[Unit]
+Description=HACHE-TRADER paper market scanner (SIMULATION ONLY)
+Documentation=https://github.com/manglefurniture/HACHE-TRADER
+After=network-online.target
+Wants=network-online.target
+StartLimitIntervalSec=300
+StartLimitBurst=3
+
+[Service]
+Type=simple
+DynamicUser=yes
+WorkingDirectory=/opt/hache-trader/current
+ExecStart=/usr/bin/python3 -B -m hache_trader run --state-dir /var/lib/hache-trader-paper
+Restart=on-failure
+RestartSec=20
+TimeoutStopSec=20
+StateDirectory=hache-trader-paper
+StateDirectoryMode=0700
+UMask=0077
+NoNewPrivileges=yes
+CapabilityBoundingSet=
+AmbientCapabilities=
+ProtectSystem=strict
+ProtectHome=yes
+PrivateTmp=yes
+PrivateDevices=yes
+ProtectKernelTunables=yes
+ProtectKernelModules=yes
+ProtectControlGroups=yes
+ProtectClock=yes
+LockPersonality=yes
+RestrictSUIDSGID=yes
+RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6
+MemoryMax=256M
+TasksMax=30
+
+[Install]
+WantedBy=multi-user.target
