@@ -8,6 +8,7 @@ from .domain import GuardError, Policy
 from .diagnostics import diagnose
 from .reports import report
 from .runtime import ProcessLock, Worker
+from .observer import MarketObserver
 from .safetrade import SafeTrade
 from .store import Store
 from .telegram import Channel, TelegramAPI, read_secret
@@ -15,7 +16,7 @@ from .telegram import Channel, TelegramAPI, read_secret
 
 def main():
     parser = argparse.ArgumentParser(description="HACHE-TRADER — SIMULACIÓN únicamente")
-    parser.add_argument("command", choices=["init", "serve", "run", "scan", "status", "pause", "resume", "emergency", "reconcile", "backup", "policy", "diagnose"])
+    parser.add_argument("command", choices=["init", "serve", "observe", "run", "scan", "status", "pause", "resume", "emergency", "reconcile", "backup", "policy", "diagnose"])
     parser.add_argument("--state-dir", default="runtime")
     parser.add_argument("--policy")
     parser.add_argument("--destination")
@@ -58,13 +59,13 @@ def main():
             if dest.exists() or dest == root / "ledger.sqlite":
                 raise GuardError("backup_refuses_overwrite")
             store.backup(dest)
-        elif args.command in ("serve", "run", "scan"):
+        elif args.command in ("serve", "observe", "run", "scan"):
             with ProcessLock(root / "worker.lock"):
                 store.reconcile(now)
-                if args.command == "serve" and not args.telegram:
+                if args.command in ("serve", "observe") and not args.telegram:
                     raise GuardError("telegram_required")
-                worker = None if args.command == "serve" else Worker(
-                    store, policy, SafeTrade(), root / "STOP")
+                worker = Worker(store, policy, SafeTrade(), root / "STOP") if args.command in ("run", "scan") else None
+                observer = MarketObserver(store, policy, SafeTrade()) if args.command == "observe" else None
                 channel = None
                 if args.telegram:
                     creds = Path(os.environ.get("CREDENTIALS_DIRECTORY", "credentials"))
@@ -75,13 +76,19 @@ def main():
                     if tg.call("getMe", {}).get("id") != expected:
                         raise GuardError("independent_bot_identity_mismatch")
                     channel = Channel(store, tg, int(os.environ["HACHE_TRADER_CHAT_ID"]), int(os.environ["HACHE_TRADER_USER_ID"]), policy)
+                next_observation = 0
                 while True:
-                    success = worker.cycle() if worker is not None else False
+                    success = False
                     if channel:
                         try:
                             channel.poll(int(time.time()))
                         except GuardError:
                             store.control("pause", int(time.time()))
+                    if observer is not None and int(time.time()) >= next_observation:
+                        observer.cycle()
+                        next_observation = int(time.time()) + 180
+                    if worker is not None:
+                        success = worker.cycle()
                     if args.command == "scan":
                         if not success:
                             raise GuardError("scan_unavailable_entries_paused")
