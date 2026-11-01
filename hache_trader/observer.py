@@ -23,6 +23,8 @@ class MarketObserver:
                 raise GuardError("fee_schema_invalid")
             result.extend(rows)
             if len(rows) < 100:
+                if not result:
+                    raise GuardError("fees_catalog_unavailable")
                 return result
         raise GuardError("fee_pagination_incomplete")
 
@@ -108,6 +110,7 @@ class MarketObserver:
                          "missing_book", "invalid_book", "unordered_book",
                          "crossed_book", "stale_or_future_book", "invalid_book_sequence",
                          "depth_schema_unverified", "market_schema_unverified",
+                         "fee_unknown",
                          "invalid_market_rules", "market_disabled", "invalid_precision",
                          "spot_usdt_only", "market_identity_mismatch",
                          "wrong_market_depth"}
