@@ -23,7 +23,7 @@ class TelegramServeTests(unittest.TestCase):
             env = {
                 "HACHE_TRADER_BOT_ID": "1234567890",
                 "HACHE_TRADER_CHAT_ID": "424242",
-                "HACHE_TRADER_USER_ID": "5074130395",
+                "HACHE_TRADER_USER_ID": "424242",
                 "CREDENTIALS_DIRECTORY": "/dev/null/hache-trader-test",
             }
 
@@ -31,7 +31,7 @@ class TelegramServeTests(unittest.TestCase):
                 if method == "getWebhookInfo":
                     return {"url": ""}
                 if method == "getMe":
-                    return {"id": 9297293373}
+                    return {"id": 1234567890}
                 raise AssertionError("Unexpected Telegram call: " + method)
 
             with patch.dict(os.environ, env), \
