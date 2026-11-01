@@ -44,7 +44,7 @@ El bot de HACHE-TRADER debe ser diferente del bot de minería.
 4. Comprobar que `getWebhookInfo` no indica otro consumidor y que solo este servicio consume `getUpdates`.
 5. Probar `/estado`, `/pausar`, `/reanudar` (con confirmación) y `/emergencia` usando únicamente datos ficticios.
 
-Se incorpora ahora la plantilla separada `deployment/systemd/hache-trader-telegram-paper.service`. No está instalada. Debe **reemplazar**, nunca ejecutarse simultáneamente con `hache-trader-paper.service`, ya que ambos comparten el ledger y solo uno debe usar `getUpdates`.
+La primera instalación del bot utiliza `serve --telegram`: solo recibe mensajes privados y devuelve el estado del ledger de prueba, sin consultar SafeTrade ni ejecutar operaciones. **El radar permanece desactivado en esta fase.** Activarlo posteriormente exige nuevas pruebas y revisión.\n\nSe incorpora ahora la plantilla separada `deployment/systemd/hache-trader-telegram-paper.service`. No está instalada. Debe **reemplazar**, nunca ejecutarse simultáneamente con `hache-trader-paper.service`, ya que ambos comparten el ledger y solo uno debe usar `getUpdates`.
 
 Para el bot ya creado, conservar fuera de GitHub los identificadores de usuario/chat y el secreto. La configuración esperada en el servidor cuando se autorice el despliegue es:
 
