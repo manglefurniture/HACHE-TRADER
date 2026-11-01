@@ -1,5 +1,7 @@
 """Read-only reports: realized P&L never includes open positions."""
 import json
+from datetime import datetime
+from zoneinfo import ZoneInfo
 from .domain import money
 from .store import local_day
 
@@ -35,22 +37,63 @@ def report(store, now, period="all"):
             "timezone": "America/Cancun", "markets": s["markets"]}
 
 
+_REASONS = {
+    "insufficient_candles": "velas recientes insuficientes",
+    "stale_candles": "velas desactualizadas",
+    "candle_gap_or_duplicate": "velas incompletas",
+    "irregular_volume": "volumen irregular",
+    "safetrade_http_404": "mercado sin datos disponibles",
+    "fee_unknown": "comisiones no verificadas",
+    "stale_or_future_book": "libro de órdenes desactualizado",
+    "wrong_market_depth": "libro de órdenes incorrecto",
+}
+
+
+def _market_message(raw):
+    status = str(raw)
+    if status.startswith("descartado: "):
+        code = status[len("descartado: "):]
+        return "descartado: " + _REASONS.get(code, code.replace("_", " "))
+    return status
+
+
 def render(store, action, now, policy):
     r = report(store, now, "day" if action == "diario" else "week" if action == "semanal" else "all")
-    prefix = "HACHE-TRADER · SIMULACIÓN\n"
+    prefix = "HACHE-TRADER · SIMULACIÓN\\n"
+    state = store.read()
+    observer = state.get("observer_state")
+    at = r["last_cycle"]
+    timestamp = (datetime.fromtimestamp(at, ZoneInfo("America/Cancun")).strftime("%d/%m/%Y %H:%M") + " (Cancún)") if at else "sin lecturas"
     if action in ("estado", "start"):
-        observed = store.read().get("observer_state")
-        observer_label = ("Radar: " + observed + " (sin operaciones)\n") if observed else ""
-        return prefix + observer_label + f"Pausado: {r['paused']} · Emergencia: {r['emergency']}\nConciliado: {r['reconciled']}\nÚltimo ciclo UTC (epoch): {r['last_cycle']}\nError: {r['last_error'] or 'ninguno'}\nOperaciones cerradas: {r['closed_trades']}"
+        if observer:
+            return (prefix + "Radar: " + observer + " (solo consulta pública)\\n"
+                    + "Operaciones automáticas: deshabilitadas\\n"
+                    + f"Último barrido: {timestamp}\\n"
+                    + f"Mercados elegibles por volumen: {state.get('observer_eligible', 0)}\\n"
+                    + f"Error: {r['last_error'] or 'ninguno'}\\n"
+                    + f"Posiciones abiertas: {'sí' if r['position'] else 'no'}")
+        return prefix + f"Pausado: {r['paused']} · Emergencia: {r['emergency']}\\nConciliado: {r['reconciled']}\\nÚltimo ciclo: {timestamp}\\nError: {r['last_error'] or 'ninguno'}\\nOperaciones cerradas: {r['closed_trades']}"
     if action in ("saldo", "ganancias", "diario", "semanal"):
         return prefix + f"Período: {r['period']}\nDisponible: {r['cash']} USDT\nReservado: {r['reserved']} USDT\nRealizado neto: {r['realized']} USDT\nNo realizado estimado: {r['unrealized_estimate'] or 'no disponible'}\nComisiones: {r['fees']} USDT\nLos saldos son simulados; la valoración no garantiza liquidación."
     if action == "posiciones":
         return prefix + (json.dumps(r["position"], ensure_ascii=False) if r["position"] else "Sin posiciones abiertas.")
     if action == "mercados":
-        return prefix + "Radar Spot USDT (último ciclo):\n" + "\n".join(f"{x['market']}: {x['status']}" for x in r["markets"][:25])
+        if not r["markets"]:
+            return prefix + "Radar Spot USDT: todavía no hay lecturas verificadas."
+        header = (f"Radar Spot USDT · {timestamp}\\n"
+                  f"Mercados elegibles por volumen: {state.get('observer_eligible', 'no disponible')}\\n"
+                  "Sin órdenes ni movimientos de fondos.\\n")
+        rows = []
+        for entry in r["markets"][:25]:
+            ident = entry["market"]
+            symbol = ident[:-4].upper() + "/USDT" if ident.endswith("usdt") else ident.upper()
+            rows.append(f"{symbol}: {_market_message(entry['status'])}")
+        return prefix + header + "\\n".join(rows)
     if action == "historial":
         orders = list(store.read()["orders"].items())[-10:]
         return prefix + "\n".join(f"{key}: {o['side']} {o['market']} · {o['status']} · ejecutado {o['filled']}" for key, o in orders)
     if action == "riesgo":
         return prefix + f"Capital {policy.capital}; por operación {policy.max_order}; posiciones 1.\nPérdida diaria acumulada {r['day_loss']} / {policy.daily_loss} USDT.\nPérdida prevista por operación ≤ {policy.trade_loss}.\nObjetivo neto {policy.target_net}; no garantizado. Sin apalancamiento ni retiros."
-    return prefix + "/estado /saldo /mercados /posiciones /historial /ganancias /diario /semanal /riesgo /pausar /reanudar /emergencia /ayuda\nPausar bloquea entradas. Emergencia solicita salidas simuladas si hay datos y liquidez; no garantiza cerrar."
+    if observer:
+        return prefix + "/estado /saldo /mercados /posiciones /historial /ganancias /diario /semanal /riesgo /pausar /emergencia /ayuda\\nRadar de solo lectura. No ejecuta órdenes ni permite reanudar operaciones."
+    return prefix + "/estado /saldo /mercados /posiciones /historial /ganancias /diario /semanal /riesgo /pausar /reanudar /emergencia /ayuda\\nPausar bloquea entradas. Emergencia solicita salidas simuladas si hay datos y liquidez; no garantiza cerrar."
