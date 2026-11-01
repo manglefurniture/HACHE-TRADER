@@ -81,7 +81,7 @@ def main():
                         raise GuardError("independent_bot_identity_mismatch")
                     channel = Channel(store, tg, int(os.environ["HACHE_TRADER_CHAT_ID"]), int(os.environ["HACHE_TRADER_USER_ID"]), policy,
                                       allow_resume=args.command not in ("observe", "serve"),
-                                      runtime_mode=args.command if args.command in ("observe", "serve") else "paper")
+                                      runtime_mode=args.command if args.command in ("observe", "serve", "trial") else "paper")
                 next_observation = 0
                 while True:
                     success = False
