@@ -81,8 +81,10 @@ class TelegramAPI:
             raise GuardError("telegram_unavailable") from None
 
 
-def menu(*, allow_resume=True):
-    actions = ["estado", "saldo", "mercados", "posiciones", "historial", "ganancias", "riesgo", "pausar", "emergencia", "diario", "semanal", "ia"]
+def menu(*, allow_resume=True, ai_enabled=False):
+    actions = ["estado", "saldo", "mercados", "posiciones", "historial", "ganancias", "riesgo", "pausar", "emergencia", "diario", "semanal"]
+    if ai_enabled:
+        actions.append("ia")
     if allow_resume:
         actions.insert(actions.index("emergencia"), "reanudar")
     return {"inline_keyboard": [[{"text": a.capitalize(), "callback_data": "menu:" + a} for a in actions[i:i+2]] for i in range(0, len(actions), 2)]}
@@ -153,7 +155,7 @@ class Channel:
                     self.store.db.execute("UPDATE confirmations SET used=1 WHERE nonce=?", (nonce,))
             elif action in READ:
                 text = render(self.store, action, now, self.policy, runtime_mode=self.runtime_mode)
-            elif action == "ia":
+            elif action == "ia" and self.ai_enabled:
                 text = ("SIMULACIÓN · Soy HACHE Trader con análisis OpenAI. "
                         "Pregunta por mercados, oportunidades, descartes, ganancias, "
                         "errores o por qué no hubo compras. "
@@ -166,7 +168,7 @@ class Channel:
                         "Escribe /ia para ejemplos. No ejecuto instrucciones en lenguaje natural.")
             else:
                 text = render(self.store, "ayuda", now, self.policy, runtime_mode=self.runtime_mode)
-            markup = {"inline_keyboard": [[{"text": "Confirmar simulación", "callback_data": "resume:"+confirmation}]]} if confirmation else menu(allow_resume=self.allow_resume)
+            markup = {"inline_keyboard": [[{"text": "Confirmar simulación", "callback_data": "resume:"+confirmation}]]} if confirmation else menu(allow_resume=self.allow_resume, ai_enabled=self.ai_enabled)
             self.store.enqueue("update:" + str(ident), {"text": text, "reply_markup": markup, "confirmation": confirmation})
         return "processed"
 
