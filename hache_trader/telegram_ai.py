@@ -63,6 +63,13 @@ def classify_question(raw):
     # A malformed command must never be interpreted as a natural-language action.
     if raw.lstrip().startswith(("/", "!", ".")):
         return None
+    # Trading imperatives must be handled only by explicit deterministic controls.
+    if re.search(
+        r"\b(compra|comprar|vende|vender|retira|retirar|transfiere|transferir|"
+        r"reanuda|reanudar|pausa|pausar|desactiva|desactivar|quita|quitar|"
+        r"cambia|cambiar|configura|configurar)\b", normalized
+    ):
+        return None
     market = None
     for pattern, symbol in (
         (r"\b(bitcoin|btc)\b", "btcusdt"),
