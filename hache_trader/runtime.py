@@ -126,11 +126,11 @@ class Worker:
         self.offset = (self.offset + len(batch)) % max(1, len(eligible))
         for ident in batch:
             status = next(x for x in statuses if x["market"] == ident)
-            market = market_from_api(universe[ident], self.fee_for(fee_rows, ident))
-            candles = self.api.candles(ident)
-            book = self.api.book(ident)
-            self.mark(market, book)
             try:
+                market = market_from_api(universe[ident], self.fee_for(fee_rows, ident))
+                candles = self.api.candles(ident)
+                book = self.api.book(ident)
+                self.mark(market, book)
                 choices = signals(candles, int(self.clock()))
                 if not choices:
                     status["status"] = "sin señal explicable"
@@ -139,7 +139,16 @@ class Worker:
                 candidates.append((choices[0].score, market, plan, candles))
                 status["status"] = "candidato " + choices[0].strategy + " (beneficio no garantizado)"
             except GuardError as exc:
-                status["status"] = str(exc)
+                reason = str(exc)
+                # A missing or invalid individual market is not a reason to
+                # disable healthy markets. Exchange-wide auth/rate/transport
+                # failures must still pause all new entries (fail closed).
+                if reason in ("circuit_open", "safetrade_transport_or_schema_error",
+                              "stale_http_response") or (
+                                  reason.startswith("safetrade_http_") and
+                                  reason != "safetrade_http_404"):
+                    raise
+                status["status"] = "descartado: " + reason
         now = int(self.clock())
         with self.store.transaction():
             s = self.store.read()
