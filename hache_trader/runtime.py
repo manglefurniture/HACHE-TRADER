@@ -106,9 +106,12 @@ class Worker:
             book = self.api.book(market.id)
             self.mark(market, book)
             exit_id = self.engine.manage_exit(market, book, int(self.clock()))
-            if exit_id:
+            if exit_id and self.store.read()["position"] is not None:
+                # The engine queues the definitive closing alert atomically.
+                # Do not send a second vague "exit evaluated" notification
+                # after the position is fully closed.
                 with self.store.transaction():
-                    self.store.enqueue(exit_id, {"text": "SIMULACIÓN · Salida evaluada. Consulta /posiciones y /historial para ejecuciones y remanentes."})
+                    self.store.enqueue(exit_id, {"text": "SIMULACIÓN · Salida evaluada con posición restante. Consulta /posiciones para el remanente ficticio."})
         tickers = self.api.get("/trade/public/tickers")
         if not isinstance(tickers, dict):
             raise GuardError("tickers_schema_invalid")

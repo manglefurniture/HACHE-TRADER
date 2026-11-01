@@ -118,9 +118,14 @@ class PaperEngine:
                     s["reserved"] = str(money(s["reserved"]) - released)
                     s["cash"] = str(money(s["cash"]) + released - gross - charge)
                     pos = s["position"] or {"market": market.id, "quantity": "0", "cost": "0",
-                                           "stop": o["stop"], "target": o["target"], "opened": now}
+                                           "stop": o["stop"], "target": o["target"], "opened": now,
+                                           "trade_net": "0", "trade_fees": "0"}
                     pos["quantity"] = str(money(pos["quantity"]) + quantity)
                     pos["cost"] = str(money(pos["cost"]) + gross + charge)
+                    # Keep estimated fees on the position so its complete net
+                    # result can be reported after one or several sell fills.
+                    if "trade_fees" in pos:
+                        pos["trade_fees"] = str(money(pos["trade_fees"]) + charge)
                     s["position"] = pos
                 else:
                     pos = s["position"]
@@ -129,11 +134,34 @@ class PaperEngine:
                     s["cash"] = str(money(s["cash"]) + net)
                     s["realized"] = str(money(s["realized"]) + realized)
                     s["day_loss"] = str(money(s["day_loss"]) + max(money(0), -realized))
+                    complete_history = "trade_net" in pos and "trade_fees" in pos
+                    if complete_history:
+                        pos["trade_net"] = str(money(pos["trade_net"]) + realized)
+                        pos["trade_fees"] = str(money(pos["trade_fees"]) + charge)
                     pos["quantity"] = str(money(pos["quantity"]) - quantity)
                     pos["cost"] = str(money(pos["cost"]) - basis)
                     if money(pos["quantity"]) == 0:
                         s["position"] = None
                         s["closed_trades"] += 1
+                        name = market.base.upper() + "/USDT"
+                        if complete_history:
+                            pnl = money(pos["trade_net"])
+                            fees = money(pos["trade_fees"])
+                            result = ("Ganancia" if pnl > 0 else
+                                      "Pérdida" if pnl < 0 else "Sin ganancia ni pérdida")
+                            detail = (f"{result}: {pnl:+.6f} USDT netos ficticios\n"
+                                      f"Comisiones estimadas (compra y ventas): {fees:.6f} USDT\n")
+                        else:
+                            # An open position from an older release may have
+                            # been partially sold previously. Never invent
+                            # a full-position P&L from incomplete history.
+                            detail = "Neto individual no disponible (posición anterior a la actualización).\n"
+                        self.store.enqueue("paper:closed:" + str(s["closed_trades"]), {
+                            "text": ("SIMULACIÓN · Posición CERRADA: " + name + "\n"
+                                     + detail
+                                     + f"Saldo ficticio disponible: {money(s['cash']):.6f} USDT\n"
+                                     + "No se utilizaron fondos reales.")
+                        })
                 remaining -= quantity
                 filled += quantity
                 if remaining == 0:

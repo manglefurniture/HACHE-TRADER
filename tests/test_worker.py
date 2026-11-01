@@ -82,6 +82,14 @@ class WorkerTests(unittest.TestCase):
                 self.assertTrue(worker.cycle())
                 self.assertIsNone(store.read()["position"])
                 self.assertEqual(store.read()["closed_trades"], 1)
+                notifications = store.db.execute(
+                    "SELECT id FROM outbox WHERE id LIKE 'paper:closed:%'").fetchall()
+                self.assertEqual(len(notifications), 1)
+                self.assertEqual(notifications[0]["id"], "paper:closed:1")
+                # A completed closure must not also produce the generic
+                # "exit evaluated" message.
+                self.assertEqual(store.db.execute(
+                    "SELECT count(*) FROM outbox WHERE id LIKE 'exit:%'").fetchone()[0], 0)
                 self.assertEqual(sum(1 for x in store.read()["orders"]
                                      if x.startswith("entry:")), 1)
                 self.assertTrue(worker.cycle())
