@@ -49,7 +49,7 @@ python3 -m hache_trader reconcile --state-dir ./local-paper-state
 
 After a healthy scan and reconciliation, a deliberate `resume` can enable *paper* entries; it **never** activates real money trading. An emergency marker blocks new buys and must not be removed casually. An emergency does not prove that an existing paper position has closed.
 
-The Telegram interface accepts `/estado`, `/saldo`, `/mercados`, `/posiciones`, `/historial`, `/ganancias`, `/riesgo`, `/pausar`, `/reanudar`, and `/emergencia`. The `/reanudar` action requires a short-lived private confirmation and a recent healthy scan.
+The dedicated Telegram service starts with `serve --telegram`. It reports the 50 USDT simulated balance and owner-only controls **without launching the SafeTrade scanner or placing even paper trades**. Market analysis remains disabled during initial rollout.\n\nThe Telegram interface accepts `/estado`, `/saldo`, `/mercados`, `/posiciones`, `/historial`, `/ganancias`, `/riesgo`, `/pausar`, `/reanudar`, and `/emergencia`. The `/reanudar` action requires a short-lived private confirmation and a recent healthy scan.
 
 ## Current limitations
 
