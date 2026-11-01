@@ -1,0 +1,14 @@
+[Unit]
+Description=Run HACHE Trader OpenAI shadow market observer four times daily
+
+[Timer]
+OnCalendar=*-*-* 01:20:00 UTC
+OnCalendar=*-*-* 07:20:00 UTC
+OnCalendar=*-*-* 13:20:00 UTC
+OnCalendar=*-*-* 19:20:00 UTC
+Persistent=true
+RandomizedDelaySec=180
+Unit=hache-trader-ai-shadow.service
+
+[Install]
+WantedBy=timers.target

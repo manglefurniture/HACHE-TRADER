@@ -1,0 +1,34 @@
+# Public-data OpenAI observer; no access to paper ledger or Telegram.
+[Unit]
+Description=HACHE Trader OpenAI shadow analyst (PUBLIC DATA ONLY)
+Documentation=https://github.com/manglefurniture/HACHE-TRADER
+Wants=network-online.target
+After=network-online.target
+ConditionPathExists=/etc/hache-trader/openai_api_key
+
+[Service]
+Type=oneshot
+DynamicUser=yes
+WorkingDirectory=/opt/hache-trader/current
+LoadCredential=openai_api_key:/etc/hache-trader/openai_api_key
+ExecStart=/usr/bin/python3 -B -m hache_trader.ai_shadow --state-dir /var/lib/hache-trader-ai-shadow
+StateDirectory=hache-trader-ai-shadow
+StateDirectoryMode=0700
+UMask=0077
+TimeoutStartSec=90
+NoNewPrivileges=yes
+CapabilityBoundingSet=
+AmbientCapabilities=
+ProtectSystem=strict
+ProtectHome=yes
+PrivateTmp=yes
+PrivateDevices=yes
+ProtectKernelTunables=yes
+ProtectKernelModules=yes
+ProtectControlGroups=yes
+ProtectClock=yes
+LockPersonality=yes
+RestrictSUIDSGID=yes
+RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6
+MemoryMax=128M
+TasksMax=12
