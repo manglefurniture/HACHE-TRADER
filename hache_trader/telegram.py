@@ -86,11 +86,14 @@ def menu(*, allow_resume=True):
 
 
 class Channel:
-    def __init__(self, store, api, chat_id, user_id, policy, *, allow_resume=True):
+    def __init__(self, store, api, chat_id, user_id, policy, *, allow_resume=True, runtime_mode="paper"):
         if any(type(x) is not int or x <= 0 for x in (chat_id, user_id)):
             raise GuardError("owner_ids_required")
         self.store, self.api, self.chat, self.user, self.policy = store, api, chat_id, user_id, policy
-        self.allow_resume = allow_resume
+        if runtime_mode not in ("paper", "observe", "serve"):
+            raise GuardError("invalid_runtime_mode")
+        self.allow_resume = allow_resume and runtime_mode == "paper"
+        self.runtime_mode = runtime_mode
 
     def process(self, update, now):
         if type(update) is not dict or type(update.get("update_id")) is not int or not 0 <= update["update_id"] < 2**63:
@@ -144,9 +147,9 @@ class Channel:
                         text = "SIMULACIÓN · No se puede reanudar: revisar conciliación, emergencia y datos recientes."
                     self.store.db.execute("UPDATE confirmations SET used=1 WHERE nonce=?", (nonce,))
             elif action in READ:
-                text = render(self.store, action, now, self.policy)
+                text = render(self.store, action, now, self.policy, runtime_mode=self.runtime_mode)
             else:
-                text = render(self.store, "ayuda", now, self.policy)
+                text = render(self.store, "ayuda", now, self.policy, runtime_mode=self.runtime_mode)
             markup = {"inline_keyboard": [[{"text": "Confirmar simulación", "callback_data": "resume:"+confirmation}]]} if confirmation else menu(allow_resume=self.allow_resume)
             self.store.enqueue("update:" + str(ident), {"text": text, "reply_markup": markup, "confirmation": confirmation})
         return "processed"
