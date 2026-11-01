@@ -91,6 +91,43 @@ class WorkerTests(unittest.TestCase):
             finally:
                 store.close()
 
+    def test_daily_entry_cap_skips_without_pausing_and_resets_next_day(self):
+        with tempfile.TemporaryDirectory() as folder:
+            policy = Policy()
+            store = Store(Path(folder) / "paper.sqlite", policy, NOW)
+            try:
+                store.reconcile(NOW)
+                api = MarketStub()
+                worker = Worker(store, policy, api, Path(folder) / "STOP",
+                                clock=lambda: api.now)
+                self.assertTrue(worker.cycle())
+                store.control("resume", api.now)
+                with store.transaction():
+                    state = store.read()
+                    for n in range(3):
+                        state["orders"]["old_" + str(n)] = {
+                            "side": "buy", "created": NOW,
+                            "market": "abcusdt", "status": "cancelled",
+                            "reserve": "0"
+                        }
+                    store.save(state, "three_old_entries_fixture", {}, api.now)
+                self.assertTrue(worker.cycle())
+                state = store.read()
+                self.assertFalse(state["paused"])
+                self.assertIsNone(state["last_error"])
+                self.assertIsNone(state["position"])
+                self.assertEqual(len(state["orders"]), 3)
+                api.now += 86400
+                self.assertTrue(worker.cycle())
+                state = store.read()
+                self.assertFalse(state["paused"])
+                self.assertIsNone(state["last_error"])
+                new_buys = [o for o in state["orders"].values()
+                            if o["side"] == "buy" and o["created"] >= NOW+86400]
+                self.assertEqual(len(new_buys), 1)
+            finally:
+                store.close()
+
     def test_missing_pair_is_skipped_without_disabling_other_pairs(self):
         with tempfile.TemporaryDirectory() as folder:
             policy = Policy()
