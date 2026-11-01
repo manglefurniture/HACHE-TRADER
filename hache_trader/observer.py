@@ -41,10 +41,16 @@ class MarketObserver:
         except (GuardError, KeyError, TypeError, OSError, ArithmeticError):
             with self.store.transaction():
                 state = self.store.read()
+                first_failure = state["last_error"] != "observer_market_data_unavailable"
                 state["paused"] = True
                 state["last_error"] = "observer_market_data_unavailable"
                 state["observer_state"] = "sin datos verificables"
                 self.store.save(state, "observer_failed_closed", {}, now)
+                if first_failure:
+                    self.store.enqueue("observer:error:" + str(now), {
+                        "text": "SIMULACIÓN · Radar SafeTrade sin datos verificables. "
+                                "Se conserva la pausa y no se ejecutan operaciones."
+                    })
             return False
 
     def _scan(self, now):
@@ -122,4 +128,9 @@ class MarketObserver:
             self.store.save(state, "public_markets_observed",
                             {"inspected": [x[0] for x in batch],
                              "eligible": len(eligible), "universe": len(universe)}, now)
+            if old["last_error"] == "observer_market_data_unavailable":
+                self.store.enqueue("observer:recovered:" + str(now), {
+                    "text": "SIMULACIÓN · Radar SafeTrade recuperó el acceso público. "
+                            "Solo observación; entradas aún bloqueadas."
+                })
         return True
