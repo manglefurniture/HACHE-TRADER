@@ -57,16 +57,16 @@ def _market_message(raw):
     return status
 
 
-def render(store, action, now, policy):
+def render(store, action, now, policy, *, runtime_mode="paper"):
     r = report(store, now, "day" if action == "diario" else "week" if action == "semanal" else "all")
     prefix = "HACHE-TRADER · SIMULACIÓN\n"
     state = store.read()
-    observer = state.get("observer_state")
+    observer = runtime_mode == "observe"
     at = r["last_cycle"]
     timestamp = (datetime.fromtimestamp(at, ZoneInfo("America/Cancun")).strftime("%d/%m/%Y %H:%M") + " (Cancún)") if at else "sin lecturas"
     if action in ("estado", "start"):
         if observer:
-            return (prefix + "Radar: " + observer + " (solo consulta pública)\n"
+            return (prefix + "Radar: " + state.get("observer_state", "iniciando") + " (solo consulta pública)\n"
                     + "Operaciones automáticas: deshabilitadas\n"
                     + f"Último barrido: {timestamp}\n"
                     + f"Mercados elegibles por volumen: {state.get('observer_eligible', 0)}\n"
@@ -82,7 +82,8 @@ def render(store, action, now, policy):
             return prefix + "Radar Spot USDT: todavía no hay lecturas verificadas."
         header = (f"Radar Spot USDT · {timestamp}\n"
                   f"Mercados elegibles por volumen: {state.get('observer_eligible', 'no disponible')}\n"
-                  "Sin órdenes ni movimientos de fondos.\n")
+                  + ("Sin órdenes ni movimientos de fondos.\n" if observer
+                     else "Consultar /historial para operaciones simuladas.\n"))
         rows = []
         for entry in r["markets"][:25]:
             ident = entry["market"]
