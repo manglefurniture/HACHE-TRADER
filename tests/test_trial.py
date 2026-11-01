@@ -64,6 +64,16 @@ class PaperTrialTests(unittest.TestCase):
             pass
 
         with TemporaryDirectory() as folder:
+            # Reuse a ledger that was healthy in observer mode a moment ago.
+            # A trial restart must invalidate that prior health timestamp.
+            previous = Store(Path(folder)/"ledger.sqlite", Policy(), NOW)
+            previous.reconcile(NOW)
+            with previous.transaction():
+                state = previous.read()
+                state["last_cycle"] = NOW
+                state["observer_state"] = "solo lectura"
+                previous.save(state, "observer_healthy_fixture", {}, NOW)
+            previous.close()
             env = {
                 "HACHE_TRADER_ENABLE_PAPER_TRIAL": "EXPLICIT_SIMULATION_ONLY",
                 "HACHE_TRADER_BOT_ID": "1234567890",
@@ -96,6 +106,9 @@ class PaperTrialTests(unittest.TestCase):
             store = Store(Path(folder)/"ledger.sqlite", Policy(), NOW)
             try:
                 self.assertTrue(store.read()["paused"])
+                self.assertEqual(store.read()["last_cycle"], 0)
+                with self.assertRaisesRegex(GuardError, "resume_requires_healthy_reconciled_state"):
+                    store.control("resume", NOW)
                 self.assertEqual(store.read()["cash"], "50")
                 status = render(store, "estado", NOW, Policy(), runtime_mode="trial")
                 self.assertIn("operaciones FICTICIAS", status)
