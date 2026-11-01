@@ -92,7 +92,7 @@ def collect_public_snapshot(api, *, now):
         try:
             ticker = tickers[ident]
             book = api.book(ident)
-            book.fresh(now, 30)
+            book.fresh(int(getattr(api, "received_at", now)), 30)
             if book.market != ident:
                 raise GuardError("mismatched_public_book")
             bid = _public_number(str(book.bids[0][0]))
