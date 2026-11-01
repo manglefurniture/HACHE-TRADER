@@ -32,6 +32,25 @@ class DeploymentTemplateTests(unittest.TestCase):
         self.assertIn("run --state-dir /var/lib/hache-trader-paper", paper)
         self.assertIn("observe --telegram --state-dir /var/lib/hache-trader-paper", telegram)
 
+    def test_trial_upgrade_is_explicit_and_rolls_back(self):
+        unit = (SERVICES / "hache-trader-telegram-trial.service").read_text()
+        upgrade = (ROOT / "deployment" / "upgrade-telegram-trial.sh").read_text()
+        for required in (
+            "DynamicUser=yes", "ProtectSystem=strict",
+            "LoadCredential=telegram_token:/etc/hache-trader/telegram_token",
+            "HACHE_TRADER_ENABLE_PAPER_TRIAL=EXPLICIT_SIMULATION_ONLY",
+            "hache_trader trial --telegram --state-dir /var/lib/hache-trader-paper",
+        ):
+            self.assertIn(required, unit)
+        self.assertNotIn("hache_trader observe --telegram --state-dir", unit)
+        self.assertIn("previous_unit_not_readonly_observer", upgrade)
+        self.assertIn("hache_trader trial --telegram", upgrade)
+        self.assertIn("sha256sum --check --status", upgrade)
+        self.assertIn("LEDGER_BACKUP_OK", upgrade)
+        self.assertIn("UPGRADE_ROLLED_BACK", upgrade)
+        self.assertNotIn("StrictHostKeyChecking=no", upgrade)
+        self.assertNotIn("chmod 777", upgrade)
+
     def test_upgrade_preserves_ledger_and_restarts_old_service_on_failure(self):
         script = (ROOT / "deployment" / "upgrade-telegram-observer.sh").read_text()
         for required in (
