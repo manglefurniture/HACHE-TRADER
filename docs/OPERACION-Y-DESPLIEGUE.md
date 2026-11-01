@@ -44,7 +44,18 @@ El bot de HACHE-TRADER debe ser diferente del bot de minería.
 4. Comprobar que `getWebhookInfo` no indica otro consumidor y que solo este servicio consume `getUpdates`.
 5. Probar `/estado`, `/pausar`, `/reanudar` (con confirmación) y `/emergencia` usando únicamente datos ficticios.
 
-La plantilla de servicio incluida arranca **sin Telegram**, intencionalmente. Añadir la configuración de credenciales/Telegram en otro PR cuando exista un bot independiente; no insertar un token en el código ni improvisar un ajuste manual en producción.
+Se incorpora ahora la plantilla separada `deployment/systemd/hache-trader-telegram-paper.service`. No está instalada. Debe **reemplazar**, nunca ejecutarse simultáneamente con `hache-trader-paper.service`, ya que ambos comparten el ledger y solo uno debe usar `getUpdates`.
+
+Para el bot ya creado, conservar fuera de GitHub los identificadores de usuario/chat y el secreto. La configuración esperada en el servidor cuando se autorice el despliegue es:
+
+- `/etc/hache-trader/telegram.env`: `HACHE_TRADER_BOT_ID`, `HACHE_TRADER_CHAT_ID` y `HACHE_TRADER_USER_ID`, archivo solo para root con permisos 0600.
+- `/etc/hache-trader/telegram_token`: token privado exclusivamente en un archivo protegido, nunca en logs ni variables de comando, permisos 0600, propietario root, sin enlaces simbólicos.
+- Directorio `/etc/hache-trader` restringido a root (0700).
+- `LoadCredential=telegram_token:/etc/hache-trader/telegram_token`: systemd entrega la credencial al servicio como archivo temporal de acceso restringido mediante `CREDENTIALS_DIRECTORY`.
+
+El token se debe comprobar localmente contra `getMe` y validar la identidad del bot antes de persistirlo. Si hay un webhook configurado o un consumidor de `getUpdates` ya activo, detener la integración antes de iniciar otro proceso.
+
+**El hecho de que BotFather haya creado el bot y que el usuario haya escrito `/start` no significa que el bot de producción esté conectado o desplegado.**
 
 ## Condiciones para encender un simulador permanente
 
