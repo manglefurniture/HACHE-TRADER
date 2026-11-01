@@ -172,6 +172,40 @@ class TelegramContractTests(unittest.TestCase):
         self.assertEqual(len(sent), 1)
         self.assertIn("SIMULACIÓN", sent[0]["text"])
 
+    def test_readonly_observer_forbids_resume_even_with_prior_confirmation(self):
+        from hache_trader.telegram import menu
+        self.channel.allow_resume = False
+        buttons = str(menu(allow_resume=False))
+        self.assertNotIn("reanudar", buttons)
+        self.channel.process(self.command(31, "reanudar"), NOW)
+        self.assertEqual(self.store.db.execute(
+            "SELECT count(*) FROM confirmations").fetchone()[0], 0)
+        self.assertTrue(self.store.read()["paused"])
+        self.channel.flush(NOW)
+        self.assertIn("solo lectura", self.sent[0][1]["text"])
+
+        # Older callbacks must not enable entries after a deploy.
+        with self.store.transaction():
+            self.store.db.execute(
+                "INSERT INTO confirmations(nonce,expires,message_id) VALUES(?,?,?)",
+                ("prior_confirm", NOW + 60, 123))
+        callback = {
+            "update_id": 32,
+            "callback_query": {
+                "data": "resume:prior_confirm",
+                "from": {"id": 42},
+                "message": {
+                    "message_id": 123,
+                    "chat": {"id": 42, "type": "private"}
+                },
+            },
+        }
+        self.channel.process(callback, NOW)
+        self.assertTrue(self.store.read()["paused"])
+        self.assertEqual(self.store.db.execute(
+            "SELECT used FROM confirmations WHERE nonce='prior_confirm'"
+        ).fetchone()[0], 0)
+
     def test_resume_requires_confirmed_message_and_healthy_state(self):
         with self.store.transaction():
             state = self.store.read()
