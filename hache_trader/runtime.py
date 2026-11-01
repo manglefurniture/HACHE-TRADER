@@ -96,6 +96,9 @@ class Worker:
         rows = self.api.markets()
         universe = {r["id"]: r for r in rows if r.get("quote_unit") == "usdt" and r.get("state") == "enabled"}
         held = self.store.read()["position"]
+        # A cycle that manages an existing position cannot also open a new one.
+        # This prevents immediate churn when a stop/target is hit.
+        had_position_at_start = held is not None
         if held:
             if held["market"] not in universe:
                 raise GuardError("held_market_unavailable")
@@ -143,7 +146,7 @@ class Worker:
             s["last_cycle"], s["last_error"], s["markets"] = now, None, statuses
             self.store.save(s, "scan_completed", {"universe": len(universe), "analyzed": batch}, now)
         s = self.store.read()
-        if candidates and not s["position"] and not s["paused"] and not s["emergency"] and not self.engine.kill_file.exists():
+        if candidates and not had_position_at_start and not s["position"] and not s["paused"] and not s["emergency"] and not self.engine.kill_file.exists():
             _, market, _, candles = max(candidates, key=lambda x: (x[0], x[1].id))
             # Revalidate the winning market after the batch; never execute old depth.
             stamp, volume = self.api.ticker(market.id)
@@ -154,13 +157,17 @@ class Worker:
             choice = signals(candles, now)[0]
             plan = entry_plan(market, book, choice, volume, self.policy, now)
             ident = f"entry:{market.id}:{now//60}:{choice.strategy}"
-            self.engine.submit(ident, market, "buy", plan["quantity"], plan["price"], now,
-                               stop=plan["stop"], target=plan["target"], expected_loss=plan["expected_loss"])
-            execution_book = self.api.book(market.id)
-            self.engine.match(ident, market, execution_book, int(self.clock()))
-            self.engine.cancel(ident, int(self.clock()))
-            with self.store.transaction():
-                self.store.enqueue(ident, {"text": "SIMULACIÓN · Entrada procesada en " + market.id + ". Consulta /historial; puede ser parcial o no ejecutada."})
+            # A decision for the same market/minute/strategy is one-shot even
+            # after a fill, cancel or restart. Do not reuse its ID with new
+            # price/quantity terms or execute the historical order again.
+            if ident not in self.store.read()["orders"]:
+                self.engine.submit(ident, market, "buy", plan["quantity"], plan["price"], now,
+                                   stop=plan["stop"], target=plan["target"], expected_loss=plan["expected_loss"])
+                execution_book = self.api.book(market.id)
+                self.engine.match(ident, market, execution_book, int(self.clock()))
+                self.engine.cancel(ident, int(self.clock()))
+                with self.store.transaction():
+                    self.store.enqueue(ident, {"text": "SIMULACIÓN · Entrada procesada en " + market.id + ". Consulta /historial; puede ser parcial o no ejecutada."})
         with self.store.transaction():
             day = local_day(now)
             self.store.enqueue("daily:"+day, {"text": "SIMULACIÓN · Informe diario\n" + json.dumps(report(self.store, now, "day"), ensure_ascii=False)[:3000]})
