@@ -115,11 +115,15 @@ class Store:
     def control_in_transaction(self, action, now):
         state = self.read()
         if action == "resume":
+            if state.get("telegram_connection") == "unavailable":
+                raise GuardError("resume_requires_telegram_connection")
             if not state["reconciled"] or state["emergency"] or not 0 <= now - state["last_cycle"] <= 120 or state["last_error"]:
                 raise GuardError("resume_requires_healthy_reconciled_state")
             state["paused"] = False
+            state["telegram_resume_required"] = False
         elif action in ("pause", "emergency"):
             state["paused"] = True
+            state["telegram_resume_required"] = False
             state["emergency"] = state["emergency"] or action == "emergency"
         else:
             raise GuardError("unknown_control")

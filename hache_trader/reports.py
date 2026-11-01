@@ -73,6 +73,12 @@ def render(store, action, now, policy, *, runtime_mode="paper"):
                     + f"Error: {r['last_error'] or 'ninguno'}\n"
                     + f"Posiciones abiertas: {'sí' if r['position'] else 'no'}")
         if runtime_mode == "trial":
+            if state.get("telegram_connection") == "unavailable":
+                telegram_health = "Telegram: conexión interrumpida (entradas bloqueadas)\n"
+            elif state.get("telegram_resume_required"):
+                telegram_health = "Telegram: conexión recuperada; requiere /reanudar\n"
+            else:
+                telegram_health = "Telegram: conectado\n"
             entries_today = sum(
                 1 for item in state["orders"].values()
                 if item["side"] == "buy" and local_day(item["created"]) == local_day(now)
@@ -82,7 +88,8 @@ def render(store, action, now, policy, *, runtime_mode="paper"):
                     + f"Entradas simuladas del día: {entries_today}/3\n"
                     + f"Posición abierta: {'sí' if r['position'] else 'no'}\n"
                     + f"Cierres: {r['closed_trades']} · Neto simulado: {r['realized']} USDT\n"
-                    + f"Último ciclo: {timestamp}\nError: {r['last_error'] or 'ninguno'}\n"
+                    + f"Último ciclo: {timestamp}\n" + telegram_health
+                    + f"Error del mercado: {r['last_error'] or 'ninguno'}\n"
                     + "Comisiones estimadas; sin órdenes reales.")
         return prefix + f"Pausado: {r['paused']} · Emergencia: {r['emergency']}\nConciliado: {r['reconciled']}\nÚltimo ciclo: {timestamp}\nError: {r['last_error'] or 'ninguno'}\nOperaciones cerradas: {r['closed_trades']}"
     if action in ("saldo", "ganancias", "diario", "semanal"):
