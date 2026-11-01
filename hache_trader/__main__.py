@@ -75,7 +75,8 @@ def main():
                     expected = int(os.environ["HACHE_TRADER_BOT_ID"])
                     if tg.call("getMe", {}).get("id") != expected:
                         raise GuardError("independent_bot_identity_mismatch")
-                    channel = Channel(store, tg, int(os.environ["HACHE_TRADER_CHAT_ID"]), int(os.environ["HACHE_TRADER_USER_ID"]), policy)
+                    channel = Channel(store, tg, int(os.environ["HACHE_TRADER_CHAT_ID"]), int(os.environ["HACHE_TRADER_USER_ID"]), policy,
+                                      allow_resume=args.command not in ("observe", "serve"))
                 next_observation = 0
                 while True:
                     success = False
