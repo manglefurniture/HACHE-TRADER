@@ -94,15 +94,18 @@ class PaperTrialTests(unittest.TestCase):
                     patch("hache_trader.__main__.read_secret", return_value="000000:fake"), \
                     patch("hache_trader.__main__.TelegramAPI") as telegram_api, \
                     patch("hache_trader.__main__.Channel") as channel, \
+                    patch("hache_trader.__main__.TrialMarketLoop") as market_loop, \
                     patch("hache_trader.__main__.Worker") as worker:
                 telegram_api.return_value.call.side_effect = telegram_result
-                channel.return_value.poll.return_value = None
-                worker.return_value.cycle.side_effect = EndTest
+                channel.return_value.poll.side_effect = EndTest
                 with self.assertRaises(EndTest):
                     main()
                 self.assertEqual(channel.call_args.kwargs["runtime_mode"], "trial")
                 self.assertTrue(channel.call_args.kwargs["allow_resume"])
-                worker.return_value.cycle.assert_called_once()
+                market_loop.return_value.start.assert_called_once()
+                market_loop.return_value.check.assert_called_once()
+                market_loop.return_value.close.assert_called_once()
+                worker.assert_not_called()
             store = Store(Path(folder)/"ledger.sqlite", Policy(), NOW)
             try:
                 self.assertTrue(store.read()["paused"])
