@@ -5,6 +5,7 @@ import os
 from pathlib import Path
 import time
 from .domain import GuardError, Policy
+from .diagnostics import diagnose
 from .reports import report
 from .runtime import ProcessLock, Worker
 from .safetrade import SafeTrade
@@ -14,15 +15,22 @@ from .telegram import Channel, TelegramAPI, read_secret
 
 def main():
     parser = argparse.ArgumentParser(description="HACHE-TRADER — SIMULACIÓN únicamente")
-    parser.add_argument("command", choices=["init", "run", "scan", "status", "pause", "resume", "emergency", "reconcile", "backup", "policy"])
+    parser.add_argument("command", choices=["init", "run", "scan", "status", "pause", "resume", "emergency", "reconcile", "backup", "policy", "diagnose"])
     parser.add_argument("--state-dir", default="runtime")
     parser.add_argument("--policy")
     parser.add_argument("--destination")
     parser.add_argument("--telegram", action="store_true")
+    parser.add_argument("--market", default="pearlusdt", help="USDT pair for public API diagnosis")
     args = parser.parse_args()
     policy = Policy(**json.loads(Path(args.policy).read_text())) if args.policy else Policy()
     if args.command == "policy":
         print(json.dumps(asdict(policy), indent=2))
+        return
+    if args.command == "diagnose":
+        result = diagnose(SafeTrade(), args.market)
+        print(json.dumps(result, ensure_ascii=False, indent=2))
+        if not result["ok"]:
+            raise SystemExit(2)
         return
     root = Path(args.state_dir).resolve()
     root.mkdir(mode=0o700, parents=True, exist_ok=True)
