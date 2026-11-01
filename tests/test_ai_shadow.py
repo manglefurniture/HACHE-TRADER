@@ -126,8 +126,23 @@ class ShadowTests(unittest.TestCase):
     def test_restart_is_idempotent(self):
         provider = OpenAIFake()
         self.run_shadow(provider)
-        with self.assertRaisesRegex(GuardError, "shadow_slot_already_attempted"):
-            self.run_shadow(provider)
+        repeated = self.run_shadow(provider)
+        self.assertEqual(repeated, {
+            "status": "skipped_existing_slot", "previous_status": "completed",
+            "previous_total_tokens": 135, "new_api_calls": 0
+        })
+        self.assertEqual(len(provider.requests), 1)
+        with sqlite3.connect(self.db) as db:
+            self.assertEqual(db.execute("SELECT COUNT(*) FROM runs").fetchone()[0], 1)
+
+    def test_duplicate_is_noop_even_after_daily_budget_is_exhausted(self):
+        provider = OpenAIFake()
+        self.run_shadow(provider)
+        with sqlite3.connect(self.db) as db:
+            for i in range(3):
+                db.execute("INSERT INTO runs(slot,observed_at,snapshot,status) VALUES(?,?,?,?)",
+                           (i, self.NOW - 100, "{}", "reserved"))
+        self.assertEqual(self.run_shadow(provider)["status"], "skipped_existing_slot")
         self.assertEqual(len(provider.requests), 1)
 
     def test_failed_provider_attempt_is_recorded_once_without_leak(self):
@@ -138,8 +153,25 @@ class ShadowTests(unittest.TestCase):
         self.assertNotIn("DO_NOT_PRINT", str(error.exception))
         with sqlite3.connect(self.db) as db:
             self.assertEqual(db.execute("SELECT status FROM runs").fetchone()[0], "failed")
-        with self.assertRaisesRegex(GuardError, "shadow_slot_already_attempted"):
-            self.run_shadow(OpenAIFake())
+        retry_provider = OpenAIFake()
+        repeated = self.run_shadow(retry_provider)
+        self.assertEqual(repeated["previous_status"], "failed")
+        self.assertEqual(repeated["new_api_calls"], 0)
+        self.assertEqual(retry_provider.requests, [])
+
+    def test_previously_reserved_slot_cannot_replay(self):
+        provider = OpenAIFake()
+        with sqlite3.connect(self.db) as db:
+            db.execute("""CREATE TABLE runs(slot INTEGER PRIMARY KEY, observed_at INTEGER NOT NULL,
+                        snapshot TEXT NOT NULL, status TEXT NOT NULL, report TEXT, error_code TEXT,
+                        input_tokens INTEGER NOT NULL DEFAULT 0, output_tokens INTEGER NOT NULL DEFAULT 0,
+                        total_tokens INTEGER NOT NULL DEFAULT 0)""")
+            db.execute("INSERT INTO runs(slot,observed_at,snapshot,status) VALUES(?,?,?,?)",
+                       (self.NOW // ai_shadow.SLOT_SECONDS, self.NOW, "{}", "reserved"))
+        result = self.run_shadow(provider)
+        self.assertEqual(result["previous_status"], "reserved")
+        self.assertEqual(result["new_api_calls"], 0)
+        self.assertEqual(provider.requests, [])
 
     def test_ai_must_not_invent_market(self):
         snapshot = ai_shadow.collect_public_snapshot(MarketAPI(), now=self.NOW)
