@@ -49,7 +49,7 @@ python3 -m hache_trader reconcile --state-dir ./local-paper-state
 
 After a healthy scan and reconciliation, a deliberate `resume` can enable *paper* entries; it **never** activates real money trading. An emergency marker blocks new buys and must not be removed casually. An emergency does not prove that an existing paper position has closed.
 
-The dedicated Telegram service starts with `serve --telegram`. It reports the 50 USDT simulated balance and owner-only controls **without launching the SafeTrade scanner or placing even paper trades**. Market analysis remains disabled during initial rollout.\n\nThe Telegram interface accepts `/estado`, `/saldo`, `/mercados`, `/posiciones`, `/historial`, `/ganancias`, `/riesgo`, `/pausar`, `/reanudar`, and `/emergencia`. The `/reanudar` action requires a short-lived private confirmation and a recent healthy scan.
+The currently deployed Telegram bot uses `serve --telegram`, reporting the simulated 50 USDT balance without running a market worker. A reviewed observer upgrade will change the unit to `observe --telegram`: it will scan **public market data only**, never submit orders, and keep simulated entries paused. The existing bot stays unchanged until that upgrade is installed.\n\nThe Telegram interface accepts `/estado`, `/saldo`, `/mercados`, `/posiciones`, `/historial`, `/ganancias`, `/riesgo`, `/pausar`, `/reanudar`, and `/emergencia`. In the observer-only mode `/reanudar` is blocked, including callbacks left from previous versions; it can never enable orders.
 
 ## Current limitations
 
@@ -60,6 +60,16 @@ The dedicated Telegram service starts with `serve --telegram`. It reports the 50
 - A new independent Telegram bot, protected credentials, service packaging, operational monitoring and a full live-data soak test are still pending.
 - The original local `tests/test_integrations.py` from the interrupted Work session is not in this repository; its transfer was blocked. Independent regression coverage has been added in `tests/test_exchange_telegram.py` and `tests/test_worker.py`, but it is not a claim of identical coverage.
 
-## Deployment preparation\n\nSee `docs/OPERACION-Y-DESPLIEGUE.md` and the **not-installed** `deployment/systemd/hache-trader-paper.service` template. Installing a system service or connecting a new Telegram bot requires its own authorization and protected credentials.\n\n## Delivery policy
+## Próxima fase: radar público sin operaciones (PR #3)
+
+Antes de reemplazar el servicio actual, puede comprobarse la conexión pública de forma independiente con `python3 -m hache_trader observe-once --state-dir <ruta-aislada>`. No necesita el token del bot ni consulta saldos reales.\n\nEl comando `python3 -m hache_trader observe --telegram --state-dir <ruta>` combina Telegram con consultas públicas periódicas a SafeTrade. El radar examina un lote rotativo de hasta tres pares USDT por ciclo, registra estados de calidad de mercado y sigue **sin órdenes, posiciones ni cambios de saldo**. Se conserva el modo pausado.
+
+El servicio actual instalado con `serve --telegram` no cambia hasta que se despliegue una nueva versión aprobada. La plantilla de systemd en esta rama propone pasar a `observe` después de verificar CI y realizar una sustitución controlada del servicio. Nunca deben correr dos consumidores de `getUpdates` simultáneamente.
+
+Prueba externa aislada (01-11-2026): se pudieron consultar 56 pares USDT activos; 14 superaron el umbral inicial de volumen y los primeros tres analizados tuvieron spreads superiores al límite establecido. No se compró ni vendió nada, ni siquiera en simulación. Esta única muestra **no demuestra rentabilidad ni estabilidad continua**.
+
+**Aviso:** comprobar la visibilidad del repositorio en GitHub; fue observado como público, aunque la especificación del proyecto solicita privado. Ningún token debe guardarse en el repositorio.
+
+## Deployment preparation\n\nSee `docs/OPERACION-Y-DESPLIEGUE.md`, the versioned Telegram unit and the new `deployment/upgrade-telegram-observer.sh` (SHA- and checksum-pinned, backup and rollback). The Telegram bot is already installed in its original control-only configuration. The new observer upgrade is pending until merged, verified and carried out through authorized administrative access.\n\n## Delivery policy
 
 GitHub is the sole versioned source of truth. Keep this PR as a draft until CI, review, deployment prerequisites and paper-market stability have been verified. No manual production edits; any deployment must use an approved, reversible release and avoid modifying Hache Natación, mining, or other live services.
