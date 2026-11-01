@@ -81,6 +81,11 @@ class TelegramAITests(unittest.TestCase):
                 self.assertEqual(classify_question(phrase)[0], intent)
         self.assertEqual(classify_question("¿Por qué descartaste Bitcoin?")[1],
                          "btcusdt")
+        self.assertEqual(classify_question("¿Cuál es el precio de Bitcoin?"),
+                         ("markets", "btcusdt"))
+        self.assertEqual(classify_question("¿Hay oportunidad en BTC?"),
+                         ("opportunities", "btcusdt"))
+        self.assertIsNone(classify_question("compra 50 btc"))
 
     def test_owner_only_and_no_raw_message_persisted(self):
         q = "¿Por qué no has comprado nada?"
@@ -224,6 +229,19 @@ class TelegramAITests(unittest.TestCase):
         ev = _evidence(self.store, "rejection", "btcusdt", NOW)
         self.assertFalse(ev["market_data_fresh"])
         self.assertEqual(ev["public_market_statuses"], [])
+
+    def test_market_filter_finds_requested_symbol_beyond_first_fifty(self):
+        rows = [{"market": f"aa{i:02}usdt", "status": "sin señal"} for i in range(55)]
+        rows.append({"market": "ethusdt", "status": "descartado: fee_unknown"})
+        with self.store.transaction():
+            s = self.store.read()
+            s["markets"] = rows
+            s["last_cycle"] = NOW
+            self.store.save(s, "large_market_fixture", {}, NOW)
+        ev = _evidence(self.store, "rejection", "ethusdt", NOW)
+        self.assertTrue(ev["market_data_fresh"])
+        self.assertEqual(ev["public_market_statuses"],
+                         [{"market": "ethusdt", "status": "descartado: fee_unknown"}])
 
     def test_unit_uses_existing_bot_and_independent_secret(self):
         text = (Path(__file__).parents[1] /
