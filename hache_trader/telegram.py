@@ -157,7 +157,10 @@ class Channel:
         return "processed"
 
     def flush(self, now):
-        rows = self.store.db.execute("SELECT * FROM outbox WHERE sent=0 ORDER BY rowid LIMIT 10").fetchall()
+        rows = self.store.db.execute(
+            "SELECT * FROM outbox WHERE sent=0 "
+            "ORDER BY CASE WHEN id LIKE 'paper:closed:%' THEN 0 ELSE 1 END, rowid LIMIT 10"
+        ).fetchall()
         for row in rows:
             body = json.loads(row["body"])
             nonce = body.pop("confirmation", None)
