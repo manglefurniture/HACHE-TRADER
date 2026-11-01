@@ -19,7 +19,7 @@ class NoRedirect(urllib.request.HTTPRedirectHandler):
 
 
 class SafeTrade:
-    BASE = "https://safetrade.com/api/v2"
+    BASE = "https://safe.trade/api/v2"
     PUBLIC = re.compile(r"/trade/public/(markets(?:/[a-z0-9]{3,40}(?:/(?:depth|k-line|trades))?)?|tickers(?:/[a-z0-9]{3,40})?|trading_fees)")
     PRIVATE = frozenset(("/trade/account/balances/spot", "/trade/market/orders", "/trade/market/trades"))
 
@@ -68,6 +68,10 @@ class SafeTrade:
                 if server_date.tzinfo is None or not -5 <= self.received_at - server_date.timestamp() <= 30 or int(response.headers.get("Age", "0")) > 30:
                     raise GuardError("stale_http_response")
         except urllib.error.HTTPError as exc:
+            # A listed pair can lack a public orderbook or candles. Its 404 is
+            # a per-market absence, not an exchange-wide outage or rate limit.
+            if exc.code == 404 and path.startswith("/trade/public/"):
+                raise GuardError("safetrade_http_404") from None
             self.failures += 1
             cooldown = min(300, 2 ** min(self.failures, 8))
             if exc.code == 429:
