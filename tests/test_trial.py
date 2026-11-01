@@ -39,7 +39,7 @@ class PaperTrialTests(unittest.TestCase):
                                   stop=D("0.99"), target=D("1.02"), expected_loss=D("0.30"))
                 state = store.read()
                 self.assertEqual(state["cash"], "50.000")
-                self.assertEqual(state["reserved"], "0")
+                self.assertEqual(D(state["reserved"]), D("0"))
                 self.assertIsNone(state["position"])
                 self.assertEqual(len(state["orders"]), 3)
                 self.assertFalse(state["emergency"])
