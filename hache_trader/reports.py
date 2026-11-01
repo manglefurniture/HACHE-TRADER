@@ -40,7 +40,7 @@ def render(store, action, now, policy):
     prefix = "HACHE-TRADER · SIMULACIÓN\n"
     if action in ("estado", "start"):
         observed = store.read().get("observer_state")
-        observer_label = ("Radar: " + observed + " (sin operaciones)\\n") if observed else ""
+        observer_label = ("Radar: " + observed + " (sin operaciones)\n") if observed else ""
         return prefix + observer_label + f"Pausado: {r['paused']} · Emergencia: {r['emergency']}\nConciliado: {r['reconciled']}\nÚltimo ciclo UTC (epoch): {r['last_cycle']}\nError: {r['last_error'] or 'ninguno'}\nOperaciones cerradas: {r['closed_trades']}"
     if action in ("saldo", "ganancias", "diario", "semanal"):
         return prefix + f"Período: {r['period']}\nDisponible: {r['cash']} USDT\nReservado: {r['reserved']} USDT\nRealizado neto: {r['realized']} USDT\nNo realizado estimado: {r['unrealized_estimate'] or 'no disponible'}\nComisiones: {r['fees']} USDT\nLos saldos son simulados; la valoración no garantiza liquidación."
