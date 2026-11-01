@@ -110,6 +110,68 @@ class TelegramContractTests(unittest.TestCase):
         self.channel.flush(NOW)
         self.assertEqual(len(self.sent), 1)
 
+    def test_callback_acknowledged_and_response_sent_once(self):
+        calls = []
+        update = {
+            "update_id": 9,
+            "callback_query": {
+                "id": "safe_cb_9",
+                "data": "menu:estado",
+                "from": {"id": 42},
+                "message": {"message_id": 100,
+                            "chat": {"id": 42, "type": "private"}}
+            },
+        }
+
+        class Stub:
+            def call(self, method, body):
+                calls.append((method, body))
+                if method == "getUpdates":
+                    return [update]
+                if method == "answerCallbackQuery":
+                    return True
+                if method == "sendMessage":
+                    return {"message_id": 123}
+                raise AssertionError(method)
+
+        self.channel.api = Stub()
+        self.channel.poll(NOW)
+        self.assertEqual([name for name, _ in calls],
+                         ["getUpdates", "answerCallbackQuery", "sendMessage"])
+        self.assertEqual(calls[1][1], {"callback_query_id": "safe_cb_9"})
+        self.assertEqual(len(self.store.db.execute("SELECT * FROM outbox").fetchall()), 1)
+        self.channel.poll(NOW)
+        self.assertEqual(sum(name == "sendMessage" for name, _ in calls), 1)
+
+    def test_expired_callback_ack_error_does_not_block_owner_reply(self):
+        update = {
+            "update_id": 10,
+            "callback_query": {
+                "id": "expired_10",
+                "data": "menu:estado",
+                "from": {"id": 42},
+                "message": {"message_id": 100,
+                            "chat": {"id": 42, "type": "private"}}
+            },
+        }
+        sent = []
+
+        class Stub:
+            def call(self, method, body):
+                if method == "getUpdates":
+                    return [update]
+                if method == "answerCallbackQuery":
+                    raise GuardError("telegram_rejected")
+                if method == "sendMessage":
+                    sent.append(body)
+                    return {"message_id": 123}
+                raise AssertionError(method)
+
+        self.channel.api = Stub()
+        self.channel.poll(NOW)
+        self.assertEqual(len(sent), 1)
+        self.assertIn("SIMULACIÓN", sent[0]["text"])
+
     def test_resume_requires_confirmed_message_and_healthy_state(self):
         with self.store.transaction():
             state = self.store.read()
