@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Upgrade the existing read-only Telegram service to a SHA-pinned
+# Upgrade the existing observer OR paper-trial Telegram service to a SHA-pinned
 # automatic PAPER-only trial release (never enables real orders). Requires root and an already installed service.
 # Usage: bash upgrade-telegram-trial.sh <new-git-sha> <archive.tar.gz> <sha256>
 set -Eeuo pipefail
@@ -15,7 +15,14 @@ sha="$1"; archive="$2"; checksum="$3"
 unit="hache-trader-telegram-paper.service"
 source_unit="/etc/systemd/system/$unit"
 [[ -f "$source_unit" && ! -L "$source_unit" ]] || die "unit_not_installed"
-grep -Fq "hache_trader observe --telegram --state-dir" "$source_unit" || die "previous_unit_not_readonly_observer"
+if grep -Fq "hache_trader observe --telegram --state-dir" "$source_unit"; then
+    previous_mode=observe
+elif grep -Fq "hache_trader trial --telegram --state-dir" "$source_unit" &&
+     grep -Fq "HACHE_TRADER_ENABLE_PAPER_TRIAL=EXPLICIT_SIMULATION_ONLY" "$source_unit"; then
+    previous_mode=trial
+else
+    die "previous_unit_not_authorized_paper_service"
+fi
 [[ -L /opt/hache-trader/current ]] || die "release_link_missing"
 old_target="$(readlink /opt/hache-trader/current)"
 [[ "$old_target" =~ ^releases/[a-f0-9]{40}$ ]] || die "unexpected_release_target"
@@ -137,4 +144,4 @@ systemctl is-active --quiet "$unit"
 [[ "$(readlink /opt/hache-trader/current)" = "releases/$sha" ]]
 trap - ERR INT TERM HUP
 printf 'UPGRADE_OK\nSHA=%s\nBACKUP=%s\n' "$sha" "$backup_dir"
-printf 'BOT=ACTIVE\nPAPER_TRIAL=PAUSED_ON_START\nTRADING_REAL=DISABLED\n'
+printf 'BOT=ACTIVE\nPAPER_TRIAL=PAUSED_ON_START\nTRADING_REAL=DISABLED\nPREVIOUS_MODE=%s\n' "$previous_mode"
