@@ -30,11 +30,12 @@ GitHub Actions runs the offline test suite and checks that live order creation r
 
 ```sh
 python3 -m hache_trader policy
+python3 -m hache_trader diagnose --market pearlusdt
 python3 -m hache_trader scan --state-dir ./local-paper-state
 python3 -m hache_trader status --state-dir ./local-paper-state
 ```
 
-A scan starts **paused**. The CLI never obtains trading permissions or moves USDT. When the public API returns 403/429, is stale, or fails validation, the scanner fails closed. Do not disable TLS, bypass exchange restrictions or invent market prices.
+The diagnostic command performs only public GET requests, does not create a trading ledger, and reports the failing API stage without revealing private data. An HTTP 200 or `ok=true` is **not** evidence of strategy profitability or execution readiness.\n\nA scan starts **paused**. The CLI never obtains trading permissions or moves USDT. When the public API returns 403/429, is stale, or fails validation, the scanner fails closed. Do not disable TLS, bypass exchange restrictions or invent market prices.
 
 The canonical documented API host is `https://safe.trade/api/v2`. API responses must be checked again before a real implementation is considered. The account's actual fees, minimum order value, and execution quality are **not verified** by the public scanner.
 
@@ -59,6 +60,6 @@ The Telegram interface accepts `/estado`, `/saldo`, `/mercados`, `/posiciones`, 
 - A new independent Telegram bot, protected credentials, service packaging, operational monitoring and a full live-data soak test are still pending.
 - The original local `tests/test_integrations.py` from the interrupted Work session is not in this repository; its transfer was blocked. Independent regression coverage has been added in `tests/test_exchange_telegram.py` and `tests/test_worker.py`, but it is not a claim of identical coverage.
 
-## Delivery policy
+## Deployment preparation\n\nSee `docs/OPERACION-Y-DESPLIEGUE.md` and the **not-installed** `deployment/systemd/hache-trader-paper.service` template. Installing a system service or connecting a new Telegram bot requires its own authorization and protected credentials.\n\n## Delivery policy
 
 GitHub is the sole versioned source of truth. Keep this PR as a draft until CI, review, deployment prerequisites and paper-market stability have been verified. No manual production edits; any deployment must use an approved, reversible release and avoid modifying Hache Natación, mining, or other live services.
