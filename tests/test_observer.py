@@ -2,6 +2,7 @@
 from pathlib import Path
 from tempfile import TemporaryDirectory
 import unittest
+import json
 from unittest.mock import patch
 import os
 import sys
@@ -108,7 +109,7 @@ class ObserverTests(unittest.TestCase):
         self.assertTrue(observer.cycle())
         recovered = self.store.db.execute("SELECT id,body FROM outbox ORDER BY id").fetchall()
         self.assertEqual(len(recovered), 2)
-        self.assertIn("recuperó el acceso", recovered[1]["body"])
+        self.assertIn("recuperó el acceso", json.loads(recovered[1]["body"])["text"])
         self.assertTrue(self.store.read()["paused"])
         self.assertIsNone(self.store.read()["last_error"])
         self.assertEqual(self.store.read()["cash"], "50")
