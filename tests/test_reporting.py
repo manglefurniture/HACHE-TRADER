@@ -30,11 +30,33 @@ class ReportClarityTests(unittest.TestCase):
                 status = store.read()["markets"][0]["status"]
                 self.assertIn("spread 2.00%", status)
                 self.assertIn("máximo 0.40%", status)
-                markets = render(store, "mercados", NOW, policy)
+                markets = render(store, "mercados", NOW, policy, runtime_mode="observe")
                 self.assertIn("ABC/USDT", markets)
                 self.assertIn("Sin órdenes ni movimientos de fondos.", markets)
                 self.assertEqual(store.read()["cash"], "50")
                 self.assertEqual(store.read()["orders"], {})
+            finally:
+                store.close()
+
+    def test_stale_observer_state_does_not_hide_paper_trading(self):
+        with TemporaryDirectory() as folder:
+            policy = Policy()
+            store = Store(Path(folder) / "paper.sqlite", policy, NOW)
+            try:
+                store.reconcile(NOW)
+                with store.transaction():
+                    state = store.read()
+                    state["observer_state"] = "solo lectura"
+                    state["paused"] = False
+                    state["last_cycle"] = NOW
+                    store.save(state, "fixture_paper_active", {}, NOW)
+                status = render(store, "estado", NOW, policy, runtime_mode="paper")
+                self.assertIn("Pausado: False", status)
+                self.assertNotIn("Operaciones automáticas: deshabilitadas", status)
+                help_msg = render(store, "ayuda", NOW, policy, runtime_mode="paper")
+                self.assertIn("/reanudar", help_msg)
+                markets = render(store, "mercados", NOW, policy, runtime_mode="paper")
+                self.assertNotIn("Sin órdenes ni movimientos de fondos.", markets)
             finally:
                 store.close()
 
@@ -55,7 +77,7 @@ class ReportClarityTests(unittest.TestCase):
                         {"market": "btcusdt", "status": "descartado: insufficient_candles"}
                     ]
                     store.save(state, "test_reporting", {}, NOW)
-                status = render(store, "estado", NOW, policy)
+                status = render(store, "estado", NOW, policy, runtime_mode="observe")
                 self.assertIn("Radar: solo lectura", status)
                 self.assertIn("Operaciones automáticas: deshabilitadas", status)
                 self.assertIn("Último barrido:", status)
@@ -63,7 +85,7 @@ class ReportClarityTests(unittest.TestCase):
                 markets = render(store, "mercados", NOW, policy)
                 self.assertIn("BTC/USDT: descartado: velas recientes insuficientes", markets)
                 self.assertIn("Mercados elegibles por volumen: 14", markets)
-                help_text = render(store, "ayuda", NOW, policy)
+                help_text = render(store, "ayuda", NOW, policy, runtime_mode="observe")
                 self.assertNotIn("/reanudar", help_text)
                 self.assertTrue(store.read()["paused"])
             finally:
