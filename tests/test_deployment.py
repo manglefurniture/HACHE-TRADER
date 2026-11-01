@@ -28,7 +28,7 @@ class DeploymentTemplateTests(unittest.TestCase):
         self.assertNotIn("observe --telegram", paper)
         self.assertIn("observe --telegram", telegram)
         self.assertNotIn("run --telegram", telegram)
-        self.assertNotIn("serve --telegram", telegram)
+        self.assertNotIn("hache_trader serve --telegram", telegram)
         self.assertIn("run --state-dir /var/lib/hache-trader-paper", paper)
         self.assertIn("observe --telegram --state-dir /var/lib/hache-trader-paper", telegram)
 
