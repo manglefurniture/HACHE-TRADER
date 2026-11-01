@@ -68,8 +68,9 @@ class TelegramTimeoutTests(unittest.TestCase):
 
         def transport(req, timeout):
             calls.append((req.full_url.rsplit("/", 1)[-1], timeout))
-            return Response([] if req.full_url.endswith("/getUpdates")
-                            else {"message_id": 999})
+            return Response({"ok": True, "result": (
+                [] if req.full_url.endswith("/getUpdates") else {"message_id": 999}
+            )})
 
         api = TelegramAPI("123456789:NOT_A_REAL_TOKEN_FOR_LOCAL_TEST_ONLY",
                           transport=transport, clock=lambda: NOW)
