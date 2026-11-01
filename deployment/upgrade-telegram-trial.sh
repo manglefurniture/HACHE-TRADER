@@ -77,6 +77,12 @@ find "$new_release" -type d -exec chmod 0755 {} +
 find "$new_release" -type f -exec chmod 0644 {} +
 new_unit="$new_release/deployment/systemd/hache-trader-telegram-trial.service"
 grep -Fq 'hache_trader trial --telegram --state-dir /var/lib/hache-trader-paper' "$new_unit" || die "unit_not_paper_trial"
+# Preflight the additional LoadCredential BEFORE stopping the working bot.
+if grep -Fq 'LoadCredential=openai_api_key:/etc/hache-trader/openai_api_key' "$new_unit"; then
+    file="/etc/hache-trader/openai_api_key"
+    [[ -f "$file" && ! -L "$file" ]] || die "openai_credential_file_missing"
+    [[ "$(stat -c '%u:%a' "$file")" = "0:600" ]] || die "openai_credential_permissions_invalid"
+fi
 bash -n "$new_release/deployment/install-telegram-paper.sh"
 python3 -B -m compileall -q "$new_release/hache_trader" "$new_release/tests"
 PYTHONPATH="$new_release" PYTHONDONTWRITEBYTECODE=1 python3 -B -m unittest discover -s "$new_release/tests" -q
