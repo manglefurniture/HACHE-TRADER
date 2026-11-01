@@ -109,6 +109,18 @@ class ShadowTests(unittest.TestCase):
         self.assertIn("btcusdt", snapshot + report)
         self.assertNotIn("sk-", snapshot + report)
 
+    def test_book_freshness_uses_receipt_time(self):
+        class ReceiptAPI(MarketAPI):
+            received_at = ShadowTests.NOW + 3
+            def book(self, market):
+                class ReceiptBook(Book):
+                    def fresh(self, now, max_age):
+                        assert now == ReceiptAPI.received_at
+                return ReceiptBook()
+        self.assertEqual(
+            ai_shadow.collect_public_snapshot(ReceiptAPI(), now=self.NOW)["markets"][0]["market"],
+            "btcusdt")
+
     def test_restart_is_idempotent(self):
         provider = OpenAIFake()
         self.run_shadow(provider)
