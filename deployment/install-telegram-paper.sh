@@ -29,8 +29,16 @@ grep -Eq '^HACHE_TRADER_USER_ID=[0-9]{4,20}$' /etc/hache-trader/telegram.env || 
 unit="hache-trader-telegram-paper.service"
 [[ ! -e /etc/systemd/system/"$unit" ]] || die "service_already_installed"
 [[ ! -e /opt/hache-trader/current && ! -L /opt/hache-trader/current ]] || die "release_already_active"
-[[ ! -e /var/lib/hache-trader-paper && ! -L /var/lib/hache-trader-paper ]] || die "state_directory_already_exists"
-[[ ! -e /var/lib/private/hache-trader-paper ]] || die "private_state_already_exists"
+# systemd DynamicUser creates a managed StateDirectory symlink. A failed
+# first start may leave its ledger behind. Preserve that data on retry;
+# reject any unexpected path rather than deleting or chmodding it.
+if [[ -e /var/lib/hache-trader-paper || -L /var/lib/hache-trader-paper ]]; then
+    [[ -L /var/lib/hache-trader-paper ]] || die "unexpected_existing_state"
+    [[ "$(readlink /var/lib/hache-trader-paper)" = "private/hache-trader-paper" ]] || die "unexpected_state_target"
+    [[ -d /var/lib/private/hache-trader-paper && ! -L /var/lib/private/hache-trader-paper ]] || die "invalid_existing_private_state"
+elif [[ -e /var/lib/private/hache-trader-paper || -L /var/lib/private/hache-trader-paper ]]; then
+    die "orphaned_private_state"
+fi
 systemctl is-active --quiet hache-trader-paper.service && die "other_paper_service_active"
 systemctl is-active --quiet "$unit" && die "telegram_service_active"
 

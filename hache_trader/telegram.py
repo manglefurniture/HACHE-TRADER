@@ -24,8 +24,28 @@ def read_secret(path):
         meta = os.fstat(f.fileno())
         if not stat.S_ISREG(meta.st_mode) or meta.st_nlink != 1 or meta.st_size > 256:
             raise GuardError("unsafe_secret_file")
-        if os.name == "posix" and (meta.st_mode & 0o077 or meta.st_uid not in (0, os.geteuid())):
-            raise GuardError("unsafe_secret_permissions")
+        if os.name == "posix":
+            if meta.st_uid not in (0, os.geteuid()):
+                raise GuardError("unsafe_secret_permissions")
+            mode = stat.S_IMODE(meta.st_mode)
+            # systemd LoadCredential may grant access to a DynamicUser via a
+            # read-only group ACL (mode 0440), even when the source was 0600.
+            # Trust that exception ONLY in the service's credential directory.
+            credentials_dir = os.environ.get("CREDENTIALS_DIRECTORY")
+            systemd_credential = bool(credentials_dir) and (
+                path.parent == Path(credentials_dir)
+                and path.name == "telegram_token"
+            )
+            if systemd_credential:
+                parent = os.stat(path.parent, follow_symlinks=False)
+                if (not stat.S_ISDIR(parent.st_mode)
+                        or parent.st_uid not in (0, os.geteuid())
+                        or stat.S_IMODE(parent.st_mode) & 0o022):
+                    raise GuardError("unsafe_secret_permissions")
+            if mode & 0o007 or mode & 0o030 or (
+                mode & 0o040 and not systemd_credential
+            ):
+                raise GuardError("unsafe_secret_permissions")
         return f.read(257).strip()
 
 
