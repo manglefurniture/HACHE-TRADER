@@ -149,4 +149,14 @@ class Channel:
             raise GuardError("invalid_telegram_batch")
         for update in sorted(updates, key=lambda u: u["update_id"]):
             self.process(update, now)
+            callback = update.get("callback_query")
+            if isinstance(callback, dict):
+                callback_id = callback.get("id")
+                if isinstance(callback_id, str) and re.fullmatch(r"[A-Za-z0-9_-]{1,128}", callback_id):
+                    # Telegram buttons otherwise stay spinning. Expired callback IDs
+                    # are not financial failures and must not block outbox delivery.
+                    try:
+                        self.api.call("answerCallbackQuery", {"callback_query_id": callback_id})
+                    except GuardError:
+                        pass
         self.flush(now)
