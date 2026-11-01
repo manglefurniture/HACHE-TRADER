@@ -3,6 +3,9 @@ from decimal import Decimal
 from pathlib import Path
 import tempfile
 import unittest
+import urllib.error
+
+from hache_trader.safetrade import SafeTrade
 
 from hache_trader.domain import GuardError, Policy
 from hache_trader.runtime import Worker
@@ -15,6 +18,7 @@ class MarketStub:
         self.now = NOW
         self.exit = False
         self.fail = False
+        self.missing_market = False
 
     def get(self, path, query=None):
         if self.fail:
@@ -22,16 +26,22 @@ class MarketStub:
         if path.endswith("trading_fees"):
             return [{"market_id": "any", "taker": "0.001"}]
         if path.endswith("tickers"):
-            return {"abcusdt": {"volume": "20000"}}
+            result = {"abcusdt": {"volume": "20000"}}
+            if self.missing_market:
+                result["badusdt"] = {"volume": "20000"}
+            return result
         raise AssertionError("Unexpected endpoint")
 
     def markets(self):
-        return [{
+        rows = [{
             "id": "abcusdt", "base_unit": "abc", "quote_unit": "usdt",
             "state": "enabled", "min_amount": "0.01",
             "amount_precision": 4, "price_precision": 4,
             "min_price": "0.0001", "max_price": "100000"
         }]
+        if self.missing_market:
+            rows.append({**rows[0], "id": "badusdt", "base_unit": "bad"})
+        return rows
 
     def book(self, market):
         self.now += 2
@@ -42,6 +52,8 @@ class MarketStub:
                     sequence=self.now)
 
     def candles(self, market):
+        if market == "badusdt":
+            raise GuardError("safetrade_http_404")
         return candles(self.now)
 
     def ticker(self, market):
@@ -78,6 +90,42 @@ class WorkerTests(unittest.TestCase):
                                      if x.startswith("entry:")), 1)
             finally:
                 store.close()
+
+    def test_missing_pair_is_skipped_without_disabling_other_pairs(self):
+        with tempfile.TemporaryDirectory() as folder:
+            policy = Policy()
+            store = Store(Path(folder) / "paper.sqlite", policy, NOW)
+            try:
+                store.reconcile(NOW)
+                api = MarketStub()
+                api.missing_market = True
+                worker = Worker(store, policy, api, Path(folder) / "STOP",
+                                clock=lambda: api.now)
+                self.assertTrue(worker.cycle())
+                statuses = {x["market"]: x["status"]
+                            for x in store.read()["markets"]}
+                self.assertIn("badusdt", statuses)
+                self.assertIn("safetrade_http_404", statuses["badusdt"])
+                self.assertIsNone(store.read()["last_error"])
+                store.control("resume", api.now)
+                self.assertTrue(worker.cycle())
+                self.assertIsNotNone(store.read()["position"])
+            finally:
+                store.close()
+
+    def test_public_404_does_not_open_global_circuit(self):
+        calls = []
+        def transport(request, timeout):
+            calls.append(request.full_url)
+            raise urllib.error.HTTPError(request.full_url, 404,
+                                         "not found", {}, None)
+        api = SafeTrade(transport=transport, clock=lambda: NOW,
+                        sleep=lambda _: None)
+        for _ in range(2):
+            with self.assertRaisesRegex(GuardError, "safetrade_http_404"):
+                api.get("/trade/public/markets/abcusdt/depth")
+        self.assertEqual(len(calls), 2)
+        self.assertEqual(api.blocked_until, 0)
 
     def test_exchange_failure_blocks_new_entries(self):
         with tempfile.TemporaryDirectory() as folder:
