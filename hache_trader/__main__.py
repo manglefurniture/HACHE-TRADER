@@ -8,6 +8,7 @@ from .domain import GuardError, Policy
 from .diagnostics import diagnose
 from .reports import report
 from .runtime import ProcessLock, Worker
+from .trial_runner import TrialMarketLoop
 from .observer import MarketObserver
 from .safetrade import SafeTrade
 from .store import Store
@@ -76,7 +77,8 @@ def main():
                         state["paused"] = True
                         store.save(state, "trial_started_awaiting_fresh_scan", {}, now)
                 # Only owner-confirmed Telegram controls may re-enable paper buys.
-                worker = Worker(store, policy, SafeTrade(), root / "STOP") if args.command in ("run", "scan", "trial") else None
+                worker = Worker(store, policy, SafeTrade(), root / "STOP") if args.command in ("run", "scan") else None
+                market_loop = TrialMarketLoop(root / "ledger.sqlite", policy, SafeTrade(), root / "STOP") if args.command == "trial" else None
                 observer = MarketObserver(store, policy, SafeTrade()) if args.command in ("observe", "observe-once") else None
                 channel = None
                 if args.telegram:
@@ -91,27 +93,37 @@ def main():
                                       allow_resume=args.command not in ("observe", "serve"),
                                       runtime_mode=args.command if args.command in ("observe", "serve", "trial") else "paper")
                 next_observation = 0
-                while True:
-                    success = False
-                    if channel:
-                        try:
-                            channel.poll(int(time.time()))
-                        except GuardError:
-                            store.control("pause", int(time.time()))
-                    if observer is not None and int(time.time()) >= next_observation:
-                        observed = observer.cycle()
-                        next_observation = int(time.time()) + 180
-                        if args.command == "observe-once":
-                            if not observed:
-                                raise GuardError("observer_failed_closed")
+                if market_loop is not None:
+                    market_loop.start()
+                try:
+                    while True:
+                        if market_loop is not None:
+                            market_loop.check()
+                        success = False
+                        if channel:
+                            try:
+                                channel.poll(int(time.time()))
+                            except GuardError:
+                                # Telegram outages must always disable new
+                                # simulated entries until explicit owner resume.
+                                store.control("pause", int(time.time()))
+                        if observer is not None and int(time.time()) >= next_observation:
+                            observed = observer.cycle()
+                            next_observation = int(time.time()) + 180
+                            if args.command == "observe-once":
+                                if not observed:
+                                    raise GuardError("observer_failed_closed")
+                                break
+                        if worker is not None:
+                            success = worker.cycle()
+                        if args.command == "scan":
+                            if not success:
+                                raise GuardError("scan_unavailable_entries_paused")
                             break
-                    if worker is not None:
-                        success = worker.cycle()
-                    if args.command == "scan":
-                        if not success:
-                            raise GuardError("scan_unavailable_entries_paused")
-                        break
-                    time.sleep(5 if worker is None else 30)
+                        time.sleep(2 if market_loop is not None else (5 if worker is None else 30))
+                finally:
+                    if market_loop is not None:
+                        market_loop.close()
         print(json.dumps(report(store, int(time.time())), ensure_ascii=False, indent=2))
     finally:
         store.close()
