@@ -78,16 +78,19 @@ class TelegramAPI:
             raise GuardError("telegram_unavailable") from None
 
 
-def menu():
-    actions = ["estado", "saldo", "mercados", "posiciones", "historial", "ganancias", "riesgo", "pausar", "reanudar", "emergencia", "diario", "semanal"]
+def menu(*, allow_resume=True):
+    actions = ["estado", "saldo", "mercados", "posiciones", "historial", "ganancias", "riesgo", "pausar", "emergencia", "diario", "semanal"]
+    if allow_resume:
+        actions.insert(actions.index("emergencia"), "reanudar")
     return {"inline_keyboard": [[{"text": a.capitalize(), "callback_data": "menu:" + a} for a in actions[i:i+2]] for i in range(0, len(actions), 2)]}
 
 
 class Channel:
-    def __init__(self, store, api, chat_id, user_id, policy):
+    def __init__(self, store, api, chat_id, user_id, policy, *, allow_resume=True):
         if any(type(x) is not int or x <= 0 for x in (chat_id, user_id)):
             raise GuardError("owner_ids_required")
         self.store, self.api, self.chat, self.user, self.policy = store, api, chat_id, user_id, policy
+        self.allow_resume = allow_resume
 
     def process(self, update, now):
         if type(update) is not dict or type(update.get("update_id")) is not int or not 0 <= update["update_id"] < 2**63:
@@ -120,10 +123,14 @@ class Channel:
             if action in ("pausar", "emergencia"):
                 self.store.control_in_transaction("pause" if action == "pausar" else "emergency", now)
                 text = "SIMULACIÓN · Entradas bloqueadas. Las posiciones siguen abiertas hasta confirmar sus ejecuciones simuladas."
+            elif action == "reanudar" and not self.allow_resume:
+                text = "SIMULACIÓN · Radar de solo lectura: no hay compras ni ventas que reanudar."
             elif action == "reanudar":
                 confirmation = secrets.token_hex(16)
                 self.store.db.execute("INSERT INTO confirmations(nonce,expires) VALUES(?,?)", (confirmation, now+120))
                 text = "SIMULACIÓN · Confirmar reanudación del agente simulado (vigencia 120 s). No habilita dinero real."
+            elif action.startswith("resume:") and callback and not self.allow_resume:
+                text = "SIMULACIÓN · Reanudación bloqueada en modo radar de solo lectura."
             elif action.startswith("resume:") and callback:
                 nonce = action.removeprefix("resume:")
                 row = self.store.db.execute("SELECT * FROM confirmations WHERE nonce=?", (nonce,)).fetchone()
@@ -140,7 +147,7 @@ class Channel:
                 text = render(self.store, action, now, self.policy)
             else:
                 text = render(self.store, "ayuda", now, self.policy)
-            markup = {"inline_keyboard": [[{"text": "Confirmar simulación", "callback_data": "resume:"+confirmation}]]} if confirmation else menu()
+            markup = {"inline_keyboard": [[{"text": "Confirmar simulación", "callback_data": "resume:"+confirmation}]]} if confirmation else menu(allow_resume=self.allow_resume)
             self.store.enqueue("update:" + str(ident), {"text": text, "reply_markup": markup, "confirmation": confirmation})
         return "processed"
 
