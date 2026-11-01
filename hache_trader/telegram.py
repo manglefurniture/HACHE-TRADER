@@ -64,7 +64,9 @@ class TelegramAPI:
             raise GuardError("telegram_cooldown")
         req = urllib.request.Request(self._endpoint + method, data=canonical(data).encode(), method="POST", headers={"Content-Type": "application/json"})
         try:
-            with self.transport(req, timeout=35) as response:
+            # Polls are non-long-polling (timeout=0). Bound a hung HTTPS
+            # connection so a confirmation cannot sit behind a 35-second call.
+            with self.transport(req, timeout=10 if method == "getUpdates" else 15) as response:
                 raw = response.read(262145)
                 if len(raw) > 262144:
                     raise GuardError("telegram_response_too_large")
