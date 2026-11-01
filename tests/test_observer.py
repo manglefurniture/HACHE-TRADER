@@ -96,6 +96,32 @@ class ObserverTests(unittest.TestCase):
         self.assertEqual(data["cash"], "50")
         self.assertEqual(data["orders"], {})
 
+    def test_observe_once_requires_no_token_and_cannot_start_trading(self):
+        from hache_trader.__main__ import main
+        with TemporaryDirectory() as directory:
+            with patch.object(sys, "argv", [
+                    "hache_trader", "observe-once", "--state-dir", directory]), \
+                    patch("hache_trader.__main__.Worker") as worker, \
+                    patch("hache_trader.__main__.MarketObserver") as observer, \
+                    patch("hache_trader.__main__.TelegramAPI") as telegram:
+                observer.return_value.cycle.return_value = True
+                main()
+                observer.return_value.cycle.assert_called_once()
+                worker.assert_not_called()
+                telegram.assert_not_called()
+
+    def test_observe_once_returns_failure_when_market_unavailable(self):
+        from hache_trader.__main__ import main
+        with TemporaryDirectory() as directory:
+            with patch.object(sys, "argv", [
+                    "hache_trader", "observe-once", "--state-dir", directory]), \
+                    patch("hache_trader.__main__.Worker") as worker, \
+                    patch("hache_trader.__main__.MarketObserver") as observer:
+                observer.return_value.cycle.return_value = False
+                with self.assertRaisesRegex(GuardError, "observer_failed_closed"):
+                    main()
+                worker.assert_not_called()
+
     def test_observe_cli_never_creates_worker(self):
         from hache_trader.__main__ import main
         class StopAfterFirstPoll(Exception):
