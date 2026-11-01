@@ -1,0 +1,45 @@
+# TEMPLATE ONLY. Install only via reviewed GitHub release and authorized deployment.
+# This replaces the non-Telegram paper service; never enable both concurrently.
+# Account keys, withdrawals and live execution are absent.
+[Unit]
+Description=HACHE-TRADER Telegram control bot (SIMULATION ONLY; market worker disabled)
+Documentation=https://github.com/manglefurniture/HACHE-TRADER
+After=network-online.target
+Wants=network-online.target
+ConditionPathExists=/etc/hache-trader/telegram_token
+ConditionPathExists=/etc/hache-trader/telegram.env
+StartLimitIntervalSec=300
+StartLimitBurst=3
+
+[Service]
+Type=simple
+DynamicUser=yes
+WorkingDirectory=/opt/hache-trader/current
+EnvironmentFile=/etc/hache-trader/telegram.env
+LoadCredential=telegram_token:/etc/hache-trader/telegram_token
+ExecStart=/usr/bin/python3 -B -m hache_trader serve --telegram --state-dir /var/lib/hache-trader-paper
+Restart=on-failure
+RestartSec=30
+TimeoutStopSec=30
+StateDirectory=hache-trader-paper
+StateDirectoryMode=0700
+UMask=0077
+NoNewPrivileges=yes
+CapabilityBoundingSet=
+AmbientCapabilities=
+ProtectSystem=strict
+ProtectHome=yes
+PrivateTmp=yes
+PrivateDevices=yes
+ProtectKernelTunables=yes
+ProtectKernelModules=yes
+ProtectControlGroups=yes
+ProtectClock=yes
+LockPersonality=yes
+RestrictSUIDSGID=yes
+RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6
+MemoryMax=256M
+TasksMax=30
+
+[Install]
+WantedBy=multi-user.target

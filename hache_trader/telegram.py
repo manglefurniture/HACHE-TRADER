@@ -1,0 +1,162 @@
+"""Independent owner-only Telegram channel with atomic inbox/outbox."""
+import json
+import os
+from pathlib import Path
+import re
+import secrets
+import stat
+import time
+import urllib.error
+import urllib.request
+from .domain import GuardError, canonical
+from .reports import render
+from .safetrade import NoRedirect
+
+READ = frozenset(("start", "estado", "saldo", "mercados", "posiciones", "historial", "ganancias", "diario", "semanal", "riesgo", "ayuda"))
+
+
+def read_secret(path):
+    path = Path(path)
+    if path.is_symlink() or path.parent.is_symlink():
+        raise GuardError("unsafe_secret_path")
+    fd = os.open(path, os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0))
+    with os.fdopen(fd, "r", encoding="ascii") as f:
+        meta = os.fstat(f.fileno())
+        if not stat.S_ISREG(meta.st_mode) or meta.st_nlink != 1 or meta.st_size > 256:
+            raise GuardError("unsafe_secret_file")
+        if os.name == "posix" and (meta.st_mode & 0o077 or meta.st_uid not in (0, os.geteuid())):
+            raise GuardError("unsafe_secret_permissions")
+        return f.read(257).strip()
+
+
+class TelegramAPI:
+    def __init__(self, token, transport=None, clock=time.time):
+        if not re.fullmatch(r"[0-9]{5,15}:[A-Za-z0-9_-]{30,90}", token):
+            raise GuardError("invalid_telegram_token")
+        self._endpoint = "https://api.telegram.org/bot" + token + "/"
+        self.transport = transport or urllib.request.build_opener(NoRedirect()).open
+        self.clock, self.retry_at = clock, 0
+
+    def call(self, method, data):
+        if method not in ("getUpdates", "sendMessage", "answerCallbackQuery", "getMe", "getWebhookInfo"):
+            raise GuardError("telegram_method_not_allowed")
+        if self.clock() < self.retry_at:
+            raise GuardError("telegram_cooldown")
+        req = urllib.request.Request(self._endpoint + method, data=canonical(data).encode(), method="POST", headers={"Content-Type": "application/json"})
+        try:
+            with self.transport(req, timeout=35) as response:
+                raw = response.read(262145)
+                if len(raw) > 262144:
+                    raise GuardError("telegram_response_too_large")
+                result = json.loads(raw)
+            if result.get("ok") is not True:
+                raise GuardError("telegram_rejected")
+            return result["result"]
+        except (OSError, ValueError, KeyError):
+            self.retry_at = self.clock() + 60
+            # Never surface the request URL (contains bot token) or provider body.
+            raise GuardError("telegram_unavailable") from None
+
+
+def menu():
+    actions = ["estado", "saldo", "mercados", "posiciones", "historial", "ganancias", "riesgo", "pausar", "reanudar", "emergencia", "diario", "semanal"]
+    return {"inline_keyboard": [[{"text": a.capitalize(), "callback_data": "menu:" + a} for a in actions[i:i+2]] for i in range(0, len(actions), 2)]}
+
+
+class Channel:
+    def __init__(self, store, api, chat_id, user_id, policy):
+        if any(type(x) is not int or x <= 0 for x in (chat_id, user_id)):
+            raise GuardError("owner_ids_required")
+        self.store, self.api, self.chat, self.user, self.policy = store, api, chat_id, user_id, policy
+
+    def process(self, update, now):
+        if type(update) is not dict or type(update.get("update_id")) is not int or not 0 <= update["update_id"] < 2**63:
+            raise GuardError("invalid_telegram_update")
+        ident = update["update_id"]
+        callback = update.get("callback_query")
+        message = callback.get("message", {}) if isinstance(callback, dict) else update.get("message", {})
+        if not isinstance(message, dict):
+            return "ignored"
+        origin = callback.get("from", {}) if isinstance(callback, dict) else message.get("from", {})
+        chat = message.get("chat", {})
+        if not isinstance(origin, dict) or not isinstance(chat, dict):
+            return "ignored"
+        authorized = (type(origin.get("id")) is int and origin["id"] == self.user and origin.get("is_bot") is not True
+                      and type(chat.get("id")) is int and chat["id"] == self.chat and chat.get("type") == "private")
+        with self.store.transaction():
+            if self.store.db.execute("SELECT 1 FROM updates WHERE id=?", (ident,)).fetchone():
+                return "duplicate"
+            self.store.db.execute("INSERT INTO updates VALUES(?)", (ident,))
+            if not authorized:
+                return "ignored"
+            action = callback.get("data", "") if callback else message.get("text", "")
+            if not isinstance(action, str) or len(action) > 100:
+                return "ignored"
+            # Ignore forwarded messages and stale text commands.
+            if not callback and (message.get("forward_origin") or type(message.get("date")) is not int or not 0 <= now-message["date"] <= 300):
+                return "ignored"
+            action = action.removeprefix("menu:") if callback else action.removeprefix("/")
+            confirmation = None
+            if action in ("pausar", "emergencia"):
+                self.store.control_in_transaction("pause" if action == "pausar" else "emergency", now)
+                text = "SIMULACIÓN · Entradas bloqueadas. Las posiciones siguen abiertas hasta confirmar sus ejecuciones simuladas."
+            elif action == "reanudar":
+                confirmation = secrets.token_hex(16)
+                self.store.db.execute("INSERT INTO confirmations(nonce,expires) VALUES(?,?)", (confirmation, now+120))
+                text = "SIMULACIÓN · Confirmar reanudación del agente simulado (vigencia 120 s). No habilita dinero real."
+            elif action.startswith("resume:") and callback:
+                nonce = action.removeprefix("resume:")
+                row = self.store.db.execute("SELECT * FROM confirmations WHERE nonce=?", (nonce,)).fetchone()
+                if not row or row["used"] or row["expires"] <= now or row["message_id"] != message.get("message_id") or row["message_id"] is None:
+                    text = "SIMULACIÓN · Confirmación vencida, repetida o no vinculada."
+                else:
+                    try:
+                        self.store.control_in_transaction("resume", now)
+                        text = "SIMULACIÓN · Agente reanudado dentro de la política."
+                    except GuardError:
+                        text = "SIMULACIÓN · No se puede reanudar: revisar conciliación, emergencia y datos recientes."
+                    self.store.db.execute("UPDATE confirmations SET used=1 WHERE nonce=?", (nonce,))
+            elif action in READ:
+                text = render(self.store, action, now, self.policy)
+            else:
+                text = render(self.store, "ayuda", now, self.policy)
+            markup = {"inline_keyboard": [[{"text": "Confirmar simulación", "callback_data": "resume:"+confirmation}]]} if confirmation else menu()
+            self.store.enqueue("update:" + str(ident), {"text": text, "reply_markup": markup, "confirmation": confirmation})
+        return "processed"
+
+    def flush(self, now):
+        rows = self.store.db.execute("SELECT * FROM outbox WHERE sent=0 ORDER BY rowid LIMIT 10").fetchall()
+        for row in rows:
+            body = json.loads(row["body"])
+            nonce = body.pop("confirmation", None)
+            if nonce:
+                confirmation = self.store.db.execute("SELECT expires FROM confirmations WHERE nonce=?", (nonce,)).fetchone()
+                if not confirmation or confirmation[0] <= now:
+                    body = {"text": "SIMULACIÓN · Confirmación vencida. Solicita /reanudar otra vez."}
+                    nonce = None
+            receipt = self.api.call("sendMessage", {"chat_id": self.chat, **body})
+            if not isinstance(receipt, dict) or type(receipt.get("message_id")) is not int:
+                raise GuardError("invalid_telegram_receipt")
+            with self.store.transaction():
+                if nonce:
+                    self.store.db.execute("UPDATE confirmations SET message_id=? WHERE nonce=?", (receipt["message_id"], nonce))
+                self.store.db.execute("UPDATE outbox SET sent=1 WHERE id=?", (row["id"],))
+
+    def poll(self, now):
+        last = self.store.db.execute("SELECT MAX(id) FROM updates").fetchone()[0]
+        updates = self.api.call("getUpdates", {"offset": (last+1) if last is not None else 0, "limit": 100, "timeout": 0, "allowed_updates": ["message", "callback_query"]})
+        if not isinstance(updates, list) or len(updates) > 100:
+            raise GuardError("invalid_telegram_batch")
+        for update in sorted(updates, key=lambda u: u["update_id"]):
+            self.process(update, now)
+            callback = update.get("callback_query")
+            if isinstance(callback, dict):
+                callback_id = callback.get("id")
+                if isinstance(callback_id, str) and re.fullmatch(r"[A-Za-z0-9_-]{1,128}", callback_id):
+                    # Telegram buttons otherwise stay spinning. Expired callback IDs
+                    # are not financial failures and must not block outbox delivery.
+                    try:
+                        self.api.call("answerCallbackQuery", {"callback_query_id": callback_id})
+                    except GuardError:
+                        pass
+        self.flush(now)
