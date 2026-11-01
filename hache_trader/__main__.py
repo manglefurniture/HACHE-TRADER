@@ -15,7 +15,7 @@ from .telegram import Channel, TelegramAPI, read_secret
 
 def main():
     parser = argparse.ArgumentParser(description="HACHE-TRADER — SIMULACIÓN únicamente")
-    parser.add_argument("command", choices=["init", "run", "scan", "status", "pause", "resume", "emergency", "reconcile", "backup", "policy", "diagnose"])
+    parser.add_argument("command", choices=["init", "serve", "run", "scan", "status", "pause", "resume", "emergency", "reconcile", "backup", "policy", "diagnose"])
     parser.add_argument("--state-dir", default="runtime")
     parser.add_argument("--policy")
     parser.add_argument("--destination")
@@ -58,11 +58,13 @@ def main():
             if dest.exists() or dest == root / "ledger.sqlite":
                 raise GuardError("backup_refuses_overwrite")
             store.backup(dest)
-        elif args.command in ("run", "scan"):
+        elif args.command in ("serve", "run", "scan"):
             with ProcessLock(root / "worker.lock"):
                 store.reconcile(now)
-                api = SafeTrade()
-                worker = Worker(store, policy, api, root / "STOP")
+                if args.command == "serve" and not args.telegram:
+                    raise GuardError("telegram_required")
+                worker = None if args.command == "serve" else Worker(
+                    store, policy, SafeTrade(), root / "STOP")
                 channel = None
                 if args.telegram:
                     creds = Path(os.environ.get("CREDENTIALS_DIRECTORY", "credentials"))
@@ -74,7 +76,7 @@ def main():
                         raise GuardError("independent_bot_identity_mismatch")
                     channel = Channel(store, tg, int(os.environ["HACHE_TRADER_CHAT_ID"]), int(os.environ["HACHE_TRADER_USER_ID"]), policy)
                 while True:
-                    success = worker.cycle()
+                    success = worker.cycle() if worker is not None else False
                     if channel:
                         try:
                             channel.poll(int(time.time()))
@@ -84,7 +86,7 @@ def main():
                         if not success:
                             raise GuardError("scan_unavailable_entries_paused")
                         break
-                    time.sleep(30)
+                    time.sleep(5 if worker is None else 30)
         print(json.dumps(report(store, int(time.time())), ensure_ascii=False, indent=2))
     finally:
         store.close()
