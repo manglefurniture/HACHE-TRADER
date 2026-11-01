@@ -21,8 +21,8 @@ class TelegramServeTests(unittest.TestCase):
 
         with TemporaryDirectory() as directory:
             env = {
-                "HACHE_TRADER_BOT_ID": "9297293373",
-                "HACHE_TRADER_CHAT_ID": "5074130395",
+                "HACHE_TRADER_BOT_ID": "1234567890",
+                "HACHE_TRADER_CHAT_ID": "424242",
                 "HACHE_TRADER_USER_ID": "5074130395",
                 "CREDENTIALS_DIRECTORY": "/dev/null/hache-trader-test",
             }
