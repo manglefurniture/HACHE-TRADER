@@ -57,6 +57,7 @@ def _public_number(value):
 def _candle_metrics(api, ident, now):
     """Reuse the deterministic validator before computing closed-candle metrics."""
     candles = api.candles(ident)
+    now = int(getattr(api, "received_at", now))
     found = signals(candles, now)
     closed = [c for c in candles if type(c[0]) is int and c[0] + 60 <= now][-20:]
     if len(closed) != 20:
@@ -111,7 +112,7 @@ def collect_public_snapshot(api, *, now):
                 pass
             result.append({
                 "market": ident,
-                "as_of_utc": datetime.fromtimestamp(now, timezone.utc).isoformat(),
+                "as_of_utc": datetime.fromtimestamp(int(getattr(api, "received_at", now)), timezone.utc).isoformat(),
                 "quote_volume_24h": str(volume),
                 "best_bid": str(bid), "best_ask": str(ask),
                 "spread_pct": str(round(spread_pct, 4)),
