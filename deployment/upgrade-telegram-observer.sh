@@ -55,6 +55,13 @@ PY
 
 new_release="/opt/hache-trader/releases/$sha"
 install -d -m 0755 "$new_release"
+# A preflight rejection must not strand a partial release directory.
+preflight_cleanup() {
+    rc=$?
+    trap - EXIT
+    if [[ "$rc" -ne 0 ]]; then rm -rf -- "$new_release"; fi
+}
+trap preflight_cleanup EXIT
 # Installation only; never edit existing versioned files in place.
 tar -xzf "$archive" -C "$new_release" --no-same-owner --no-same-permissions
 chown -R root:root "$new_release"
@@ -71,7 +78,7 @@ systemd-analyze verify "$new_unit" || die "new_unit_invalid"
 install -d -m 0700 /opt/hache-trader/backups
 stamp="$(date -u +%Y%m%dT%H%M%SZ)"
 backup_dir="/opt/hache-trader/backups/upgrade-$stamp-$sha"
-install -d -m 0700 "$backup_dir"
+mkdir -m 0700 "$backup_dir"
 cp -- "$source_unit" "$backup_dir/previous.service"
 printf '%s\n' "$old_sha" > "$backup_dir/previous.sha"
 # SQLite's online backup API reads the WAL-consistent snapshot; don't copy a
@@ -87,6 +94,7 @@ print("LEDGER_BACKUP_OK")
 PY
 chmod 0600 "$backup_dir/ledger.sqlite"
 
+trap - EXIT
 stopped=false
 switched=false
 unit_replaced=false
@@ -101,21 +109,22 @@ rollback() {
         chmod 0644 "$source_unit"
     fi
     if [[ "$switched" == true ]]; then
-        ln -sfn "$old_target" /opt/hache-trader/current
+        ln -sfnT "$old_target" /opt/hache-trader/current
     fi
     systemctl daemon-reload || :
     systemctl reset-failed "$unit" || :
     if [[ "$stopped" == true ]]; then
         systemctl start "$unit" || :
     fi
+    rm -rf -- "$new_release"
     printf 'UPGRADE_ROLLED_BACK exit=%s previous=%s\n' "$rc" "$old_sha" >&2
     exit "$rc"
 }
 trap rollback ERR
 trap 'false' INT TERM HUP
-systemctl stop "$unit"
 stopped=true
-ln -sfn "releases/$sha" /opt/hache-trader/current
+systemctl stop "$unit"
+ln -sfnT "releases/$sha" /opt/hache-trader/current
 switched=true
 install -m 0644 "$new_unit" "$source_unit"
 unit_replaced=true
