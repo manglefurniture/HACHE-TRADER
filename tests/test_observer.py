@@ -96,6 +96,23 @@ class ObserverTests(unittest.TestCase):
         self.assertEqual(data["cash"], "50")
         self.assertEqual(data["orders"], {})
 
+    def test_outage_and_recovery_alerts_are_not_repeated(self):
+        api = MarketStub(failure=True)
+        observer = MarketObserver(self.store, self.policy, api, clock=lambda: NOW)
+        self.assertFalse(observer.cycle())
+        self.assertFalse(observer.cycle())
+        alerts = self.store.db.execute("SELECT id,body FROM outbox ORDER BY id").fetchall()
+        self.assertEqual(len(alerts), 1)
+        self.assertIn("sin datos verificables", alerts[0]["body"])
+        api.failure = False
+        self.assertTrue(observer.cycle())
+        recovered = self.store.db.execute("SELECT id,body FROM outbox ORDER BY id").fetchall()
+        self.assertEqual(len(recovered), 2)
+        self.assertIn("recuperó el acceso", recovered[1]["body"])
+        self.assertTrue(self.store.read()["paused"])
+        self.assertIsNone(self.store.read()["last_error"])
+        self.assertEqual(self.store.read()["cash"], "50")
+
     def test_observe_once_requires_no_token_and_cannot_start_trading(self):
         from hache_trader.__main__ import main
         with TemporaryDirectory() as directory:
