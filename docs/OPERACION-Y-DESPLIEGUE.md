@@ -1,5 +1,31 @@
 # Operación y preparación de despliegue de HACHE-TRADER
 
+## Actualización incremental del radar público
+
+El bot @HacheTraderBot ya está instalado como un servicio aislado de Telegram, utilizando `serve --telegram`. La rama del observador **no está instalada** hasta completar merge y upgrade.
+
+Para validar el radar sin afectar la instalación actual, usar una ruta aislada de datos:
+
+```bash
+python3 -B -m hache_trader observe-once --state-dir /ruta/aislada
+```
+
+El comando consulta únicamente datos públicos y sale. No necesita token de Telegram y no envía órdenes.
+
+El nuevo servicio `observe --telegram` conserva la conexión privada al bot, revisa un lote rotativo de tres mercados USDT aproximadamente cada 180 segundos y mantiene las entradas pausadas. La función `/reanudar` queda expresamente bloqueada en ese modo. El motor de operaciones simuladas y el modo real no se ejecutan.
+
+**Actualización y rollback:**
+
+- Después de fusionar un PR aprobado, generar desde GitHub un archivo `git archive` del SHA exacto y calcular SHA256.
+- Verificar pruebas, seguridad, servicio instalado y continuidad del ledger. No instalar dos consumidores `getUpdates`.
+- `deployment/upgrade-telegram-observer.sh` requiere una sesión root ya autorizada. Valida hash y contenido, prueba la versión nueva, respalda el ledger con la API SQLite y conserva el servicio anterior hasta el relevo.
+- Detiene el servicio existente antes de activar el nuevo; no altera nginx, MariaDB ni minería.
+- Si el nuevo arranque falla, restaura la versión y unidad anteriores; **no elimina el ledger**. El respaldo se conserva en `/opt/hache-trader/backups`, restringido a root.
+- Si no hay acceso administrativo autorizado por el conector remoto, no usar el sudo limitado de `deploy-hache` ni ampliar permisos. Entregar el comando root al propietario.
+- Verificar `systemctl is-active hache-trader-telegram-paper.service` y una respuesta real a `/estado` y `/mercados` antes de declarar finalizado el despliegue.
+
+Nunca ejecutar el script de primera instalación para una actualización; ese script rechaza correctamente una unidad ya instalada.
+
 ## Estado actual
 
 **SOLO SIMULACIÓN.** El motor de órdenes reales no existe. No depositar fondos ni configurar API keys con permisos de trading.
@@ -44,7 +70,7 @@ El bot de HACHE-TRADER debe ser diferente del bot de minería.
 4. Comprobar que `getWebhookInfo` no indica otro consumidor y que solo este servicio consume `getUpdates`.
 5. Probar `/estado`, `/pausar`, `/reanudar` (con confirmación) y `/emergencia` usando únicamente datos ficticios.
 
-La primera instalación del bot utiliza `serve --telegram`: solo recibe mensajes privados y devuelve el estado del ledger de prueba, sin consultar SafeTrade ni ejecutar operaciones. **El radar permanece desactivado en esta fase.** Activarlo posteriormente exige nuevas pruebas y revisión.\n\nSe incorpora ahora la plantilla separada `deployment/systemd/hache-trader-telegram-paper.service`. No está instalada. Debe **reemplazar**, nunca ejecutarse simultáneamente con `hache-trader-paper.service`, ya que ambos comparten el ledger y solo uno debe usar `getUpdates`.
+La primera versión instalada del bot utiliza `serve --telegram`: solo recibe mensajes privados y devuelve el estado del ledger de prueba, sin consultar SafeTrade ni ejecutar operaciones. **El radar permanece desactivado en esta fase.** Activarlo posteriormente exige nuevas pruebas y revisión.\n\nSe incorpora la plantilla separada `deployment/systemd/hache-trader-telegram-paper.service`. La versión inicial está instalada; la variante `observe` sigue pendiente de upgrade. Debe **reemplazar**, nunca ejecutarse simultáneamente con `hache-trader-paper.service`, ya que ambos comparten el ledger y solo uno debe usar `getUpdates`.
 
 Para el bot ya creado, conservar fuera de GitHub los identificadores de usuario/chat y el secreto. La configuración esperada en el servidor cuando se autorice el despliegue es:
 
@@ -85,7 +111,7 @@ No se editará código versionado directamente desde Remote Desktop Commander en
 
 - Validar el mercado de referencia y el uso real del endpoint público de comisiones desde el entorno elegido.
 - Obtener bot independiente y credenciales privadas sin exponer el token.
-- Resolver de forma autorizada el acceso de lectura al repositorio privado desde la infraestructura de despliegue.
+- El repositorio es público por decisión del propietario para facilitar el acceso Git del VPS. Mantener secretos exclusivamente fuera de GitHub.
 - Completar monitoreo del proceso, health checks y credenciales de Telegram.
-- Definir procedimiento aprobado de instalación systemd y rollback, sin elevar permisos existentes.
+- Ejecutar la actualización incremental solamente con los privilegios administrativos ya autorizados, sin elevar permisos existentes.
 - Auditoría independiente con Work cuando esté disponible; por ahora **PR en borrador y sin merge**.
