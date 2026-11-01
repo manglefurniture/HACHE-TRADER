@@ -18,6 +18,8 @@ WorkingDirectory=/opt/hache-trader/current
 EnvironmentFile=/etc/hache-trader/telegram.env
 Environment=HACHE_TRADER_ENABLE_PAPER_TRIAL=EXPLICIT_SIMULATION_ONLY
 LoadCredential=telegram_token:/etc/hache-trader/telegram_token
+# Separate OpenAI project; no shared Sharky/Hache Natación secrets.
+LoadCredential=openai_api_key:/etc/hache-trader/openai_api_key
 ExecStart=/usr/bin/python3 -B -m hache_trader trial --telegram --state-dir /var/lib/hache-trader-paper
 Restart=on-failure
 RestartSec=30
