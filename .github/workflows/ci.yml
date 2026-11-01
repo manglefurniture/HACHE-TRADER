@@ -20,6 +20,9 @@ jobs:
       - name: Python environment
         run: python3 --version
 
+      - name: Validate release installer syntax
+        run: bash -n deployment/install-telegram-paper.sh
+
       - name: Compile source and tests
         run: python3 -m compileall -q hache_trader tests
 
