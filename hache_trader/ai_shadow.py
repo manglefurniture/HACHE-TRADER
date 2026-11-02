@@ -206,17 +206,36 @@ def analyze(snapshot, key, *, transport=None):
     try:
         with opener(req, timeout=15) as response:
             if response.status != 200:
-                raise GuardError("openai_http_unavailable")
+                raise ShadowProviderError(_http_code(response.status))
             raw = response.read(65537)
             if len(raw) > 65536:
-                raise GuardError("openai_response_too_large")
+                raise ShadowProviderError("openai_response_too_large")
+    except urllib.error.HTTPError as exc:
+        # Never inspect HTTPError's URL, headers or response body.
+        raise ShadowProviderError(_http_code(exc.code)) from None
+    except urllib.error.URLError as exc:
+        reason = "openai_timeout" if isinstance(exc.reason, TimeoutError) else "openai_network_unavailable"
+        raise ShadowProviderError(reason) from None
+    except TimeoutError:
+        raise ShadowProviderError("openai_timeout") from None
+    except OSError:
+        raise ShadowProviderError("openai_network_unavailable") from None
+    try:
         output = json.loads(raw)
-    except (OSError, ValueError):
-        # Avoid revealing URLs, secrets or provider responses in logs.
-        raise GuardError("openai_transport_unavailable") from None
-    if not isinstance(output, dict) or output.get("status") != "completed":
-        raise GuardError("openai_response_incomplete")
-    texts = [part.get("text") for msg in output.get("output", []) if isinstance(msg, dict)
+    except (ValueError, TypeError):
+        raise ShadowProviderError("openai_json_invalid") from None
+    if not isinstance(output, dict):
+        raise ShadowProviderError("openai_response_invalid")
+    usage = _verified_usage(output)
+    if output.get("status") != "completed":
+        detail = output.get("incomplete_details")
+        limited = (isinstance(detail, dict) and detail.get("reason") == "max_output_tokens")
+        raise ShadowProviderError(
+            "openai_output_limit" if limited else "openai_response_incomplete", usage)
+    messages = output.get("output")
+    if not isinstance(messages, list):
+        raise ShadowProviderError("openai_response_invalid", usage)
+    texts = [part.get("text") for msg in messages if isinstance(msg, dict)
              for part in msg.get("content", []) if isinstance(part, dict)
              and part.get("type") == "output_text"]
     if len(texts) != 1 or not isinstance(texts[0], str):
@@ -239,13 +258,9 @@ def analyze(snapshot, key, *, transport=None):
                 or not isinstance(market["reason"], str) or len(market["reason"]) > 450):
             raise GuardError("openai_report_invalid")
         reported.add(market["market"])
-    usage = output.get("usage", {})
-    fields = ("input_tokens", "output_tokens", "total_tokens")
-    if (not isinstance(usage, dict)
-            or any(type(usage.get(k)) is not int or usage[k] < 0 for k in fields)
-            or usage["total_tokens"] < usage["input_tokens"] + usage["output_tokens"]):
-        raise GuardError("openai_usage_invalid")
-    return report, {k: usage[k] for k in fields}
+    if usage is None:
+        raise ShadowProviderError("openai_usage_invalid")
+    return report, usage
 
 
 def run_once(db_path, credential_dir, *, api=None, clock=time.time, transport=None):
