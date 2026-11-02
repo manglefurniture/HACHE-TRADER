@@ -11,6 +11,7 @@ import sqlite3
 import stat
 import time
 import urllib.request
+import urllib.error
 
 from .domain import GuardError, money
 from .safetrade import NoRedirect, SafeTrade
@@ -22,6 +23,47 @@ MAX_DAILY_CALLS, MAX_MONTHLY_CALLS = 4, 100
 MAX_DAILY_TOKENS, MAX_MONTHLY_TOKENS = 4000, 80000
 MAX_OUTPUT_TOKENS = 450
 SLOT_SECONDS = 6 * 3600
+
+# Fixed, non-sensitive diagnostic codes. Never persist exception messages,
+# provider response bodies, request URLs, authentication values or tracebacks.
+PROVIDER_FAILURES = frozenset((
+    "openai_http_400", "openai_http_401", "openai_http_403",
+    "openai_http_408", "openai_http_422", "openai_http_429",
+    "openai_http_5xx", "openai_http_other",
+    "openai_timeout", "openai_network_unavailable",
+    "openai_response_too_large", "openai_response_invalid",
+    "openai_json_invalid", "openai_response_incomplete",
+    "openai_output_limit", "openai_output_invalid",
+    "openai_report_invalid", "openai_usage_invalid",
+    "public_snapshot_too_large",
+))
+
+
+class ShadowProviderError(GuardError):
+    """Provider failure with optional verified usage; never carries raw data."""
+
+    def __init__(self, code, usage=None):
+        super().__init__(code)
+        self.usage = usage
+
+
+def _http_code(status):
+    if status in (400, 401, 403, 408, 422, 429):
+        return "openai_http_" + str(status)
+    if type(status) is int and 500 <= status <= 599:
+        return "openai_http_5xx"
+    return "openai_http_other"
+
+
+def _verified_usage(output):
+    if not isinstance(output, dict) or not isinstance(output.get("usage"), dict):
+        return None
+    usage = output["usage"]
+    fields = ("input_tokens", "output_tokens", "total_tokens")
+    if (any(type(usage.get(k)) is not int or usage[k] < 0 for k in fields)
+            or usage["total_tokens"] < usage["input_tokens"] + usage["output_tokens"]):
+        return None
+    return {k: usage[k] for k in fields}
 
 REPORT_SCHEMA = {
     "type": "object", "additionalProperties": False,
@@ -164,17 +206,36 @@ def analyze(snapshot, key, *, transport=None):
     try:
         with opener(req, timeout=15) as response:
             if response.status != 200:
-                raise GuardError("openai_http_unavailable")
+                raise ShadowProviderError(_http_code(response.status))
             raw = response.read(65537)
             if len(raw) > 65536:
-                raise GuardError("openai_response_too_large")
+                raise ShadowProviderError("openai_response_too_large")
+    except urllib.error.HTTPError as exc:
+        # Never inspect HTTPError's URL, headers or response body.
+        raise ShadowProviderError(_http_code(exc.code)) from None
+    except urllib.error.URLError as exc:
+        reason = "openai_timeout" if isinstance(exc.reason, TimeoutError) else "openai_network_unavailable"
+        raise ShadowProviderError(reason) from None
+    except TimeoutError:
+        raise ShadowProviderError("openai_timeout") from None
+    except OSError:
+        raise ShadowProviderError("openai_network_unavailable") from None
+    try:
         output = json.loads(raw)
-    except (OSError, ValueError):
-        # Avoid revealing URLs, secrets or provider responses in logs.
-        raise GuardError("openai_transport_unavailable") from None
-    if not isinstance(output, dict) or output.get("status") != "completed":
-        raise GuardError("openai_response_incomplete")
-    texts = [part.get("text") for msg in output.get("output", []) if isinstance(msg, dict)
+    except (ValueError, TypeError):
+        raise ShadowProviderError("openai_json_invalid") from None
+    if not isinstance(output, dict):
+        raise ShadowProviderError("openai_response_invalid")
+    usage = _verified_usage(output)
+    if output.get("status") != "completed":
+        detail = output.get("incomplete_details")
+        limited = (isinstance(detail, dict) and detail.get("reason") == "max_output_tokens")
+        raise ShadowProviderError(
+            "openai_output_limit" if limited else "openai_response_incomplete", usage)
+    messages = output.get("output")
+    if not isinstance(messages, list):
+        raise ShadowProviderError("openai_response_invalid", usage)
+    texts = [part.get("text") for msg in messages if isinstance(msg, dict)
              for part in msg.get("content", []) if isinstance(part, dict)
              and part.get("type") == "output_text"]
     if len(texts) != 1 or not isinstance(texts[0], str):
@@ -197,13 +258,9 @@ def analyze(snapshot, key, *, transport=None):
                 or not isinstance(market["reason"], str) or len(market["reason"]) > 450):
             raise GuardError("openai_report_invalid")
         reported.add(market["market"])
-    usage = output.get("usage", {})
-    fields = ("input_tokens", "output_tokens", "total_tokens")
-    if (not isinstance(usage, dict)
-            or any(type(usage.get(k)) is not int or usage[k] < 0 for k in fields)
-            or usage["total_tokens"] < usage["input_tokens"] + usage["output_tokens"]):
-        raise GuardError("openai_usage_invalid")
-    return report, {k: usage[k] for k in fields}
+    if usage is None:
+        raise ShadowProviderError("openai_usage_invalid")
+    return report, usage
 
 
 def run_once(db_path, credential_dir, *, api=None, clock=time.time, transport=None):
@@ -240,13 +297,18 @@ def run_once(db_path, credential_dir, *, api=None, clock=time.time, transport=No
         db.execute("INSERT INTO runs(slot,observed_at,snapshot,status) VALUES(?,?,?,?)",
                    (slot, now, "{}", "reserved"))
         db.commit()  # idempotency and quota reservation BEFORE network I/O
+        stage = "public_data"
         try:
             snapshot = collect_public_snapshot(api or SafeTrade(), now=int(clock()))
             source = json.dumps(snapshot, sort_keys=True, separators=(",", ":"))
             db.execute("UPDATE runs SET snapshot=?,status='public_data_ready' WHERE slot=?",
                        (source, slot))
             db.commit()
-            report, usage = analyze(snapshot, _credential(credential_dir), transport=transport)
+            stage = "credential"
+            key = _credential(credential_dir)
+            stage = "openai"
+            report, usage = analyze(snapshot, key, transport=transport)
+            stage = "storage"
             db.execute("""UPDATE runs SET status='completed',report=?,input_tokens=?,
                           output_tokens=?,total_tokens=? WHERE slot=?""",
                        (json.dumps(report, ensure_ascii=False, sort_keys=True),
@@ -254,11 +316,27 @@ def run_once(db_path, credential_dir, *, api=None, clock=time.time, transport=No
             db.commit()
             return {"status": "completed", "markets": len(snapshot["markets"]),
                     "usage": usage, "snapshot_sha256": hashlib.sha256(source.encode()).hexdigest()}
-        except (GuardError, OSError, ValueError, KeyError, TypeError):
-            db.execute("UPDATE runs SET status='failed',error_code='observer_or_provider_unavailable' WHERE slot=?",
-                       (slot,))
+        except (GuardError, OSError, ValueError, KeyError, TypeError, ArithmeticError) as exc:
+            if stage == "public_data":
+                code = "public_data_unavailable"
+            elif stage == "credential":
+                code = ("credential_invalid" if isinstance(exc, GuardError)
+                        else "credential_unavailable")
+            elif stage == "openai":
+                candidate = str(exc) if isinstance(exc, GuardError) else ""
+                code = candidate if candidate in PROVIDER_FAILURES else "openai_response_invalid"
+            else:
+                code = "shadow_storage_unavailable"
+            # Incomplete responses may nevertheless have consumed real tokens.
+            # Store verified usage if supplied; leave zero as unknown otherwise.
+            usage = exc.usage if isinstance(exc, ShadowProviderError) else None
+            db.execute("""UPDATE runs SET status='failed',error_code=?,
+                          input_tokens=?,output_tokens=?,total_tokens=? WHERE slot=?""",
+                       (code, (usage or {}).get("input_tokens", 0),
+                        (usage or {}).get("output_tokens", 0),
+                        (usage or {}).get("total_tokens", 0), slot))
             db.commit()
-            raise GuardError("shadow_analysis_unavailable") from None
+            raise GuardError(code) from None
 
 
 def main():
@@ -273,8 +351,18 @@ def main():
         raise SystemExit("openai_credential_directory_missing")
     try:
         print(json.dumps(run_once(root / "ai-shadow.sqlite", creds), sort_keys=True))
-    except (GuardError, OSError, sqlite3.Error):
-        raise SystemExit("shadow_analysis_unavailable") from None
+    except GuardError as exc:
+        # Never print raw provider or OS errors; only fixed, audited codes.
+        allowed = PROVIDER_FAILURES | {
+            "public_data_unavailable", "credential_invalid", "credential_unavailable",
+            "shadow_storage_unavailable", "shadow_slot_already_attempted",
+            "openai_local_budget_exhausted", "shadow_state_directory_unavailable",
+        }
+        code = str(exc) if str(exc) in allowed else "shadow_analysis_unavailable"
+        print(json.dumps({"status": "failed", "error_code": code}, sort_keys=True))
+        raise SystemExit(1) from None
+    except (OSError, sqlite3.Error):
+        raise SystemExit("shadow_storage_unavailable") from None
 
 
 if __name__ == "__main__":
