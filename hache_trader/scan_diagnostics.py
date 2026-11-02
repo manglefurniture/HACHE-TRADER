@@ -40,6 +40,12 @@ _DECISIONS = {
     "entry_filled": "entrada ficticia ejecutada al menos parcialmente",
     "entry_unfilled": "orden ficticia enviada sin ejecución",
     "other_safety_gate": "otra condición de seguridad impidió la entrada",
+    "risk_daily_loss": "presupuesto de pérdidas diario agotado",
+    "risk_plan_rejected": "plan de riesgo rechazado por el motor",
+    "risk_exposure": "saldo ficticio o exposición insuficiente",
+    "execution_blocked": "motor de ejecución bloqueado por seguridad",
+    "execution_data_invalid": "datos revalidados no aptos para ejecutar",
+    "execution_validation_failed": "la validación final del motor rechazó la entrada",
 }
 
 
