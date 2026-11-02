@@ -13,7 +13,7 @@ from .reports import render
 from .safetrade import NoRedirect
 from .telegram_ai import classify_question, queue_question
 
-READ = frozenset(("start", "estado", "saldo", "mercados", "posiciones", "historial", "ganancias", "diario", "semanal", "riesgo", "ayuda"))
+READ = frozenset(("start", "estado", "saldo", "mercados", "posiciones", "historial", "ganancias", "diario", "semanal", "riesgo", "diagnostico", "ayuda"))
 
 
 def read_secret(path):
@@ -93,6 +93,7 @@ def menu(*, allow_resume=True, ai_enabled=False):
     actions = ["estado", "saldo", "mercados", "posiciones", "historial", "ganancias", "riesgo", "pausar", "emergencia", "diario", "semanal"]
     if ai_enabled:
         actions.append("ia")
+        actions.append("diagnostico")
     if allow_resume:
         actions.insert(actions.index("emergencia"), "reanudar")
     return {"inline_keyboard": [[{"text": a.capitalize(), "callback_data": "menu:" + a} for a in actions[i:i+2]] for i in range(0, len(actions), 2)]}
