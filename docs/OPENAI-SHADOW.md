@@ -9,6 +9,34 @@ El observador **no forma parte del motor**, no importa `Worker`, `Store`, `Paper
 - Cuotas locales: 4 intentos al día UTC, 100 al mes, 4000 y 80000 tokens respectivamente. Reservar 1000 tokens conservadores por intento sin medición. **Las cuotas no equivalen a un control exacto en dólares:** mantener límite del proyecto de 2 USD en OpenAI.
 - Timer cuatro veces al día UTC con hasta 3 minutos de retardo; 15 s de timeout OpenAI. SafeTrade/OpenAI inaccesibles no afectan al motor, quedan como estado de fallo.
 
+## Diagnóstico sin credenciales (desde la nueva versión)
+
+Los fallos anteriores se guardaban como `observer_or_provider_unavailable`; **no es posible recuperar retrospectivamente su causa exacta**. La versión actualizada registra un `error_code` fijo por etapa, sin URL, token, cuerpo de respuesta, prompt ni excepción original. Categorías:
+
+- `public_data_unavailable`: no se logró preparar el snapshot público verificable.
+- `credential_invalid` / `credential_unavailable`: archivo de credencial inseguro, inválido o inaccesible.
+- `openai_http_400/401/403/408/422/429/5xx/other`: respuesta HTTP clasificada sin conservar el cuerpo.
+- `openai_timeout` / `openai_network_unavailable`: timeout o fallo de transporte.
+- `openai_json_invalid` / `openai_response_invalid` / `openai_response_incomplete` / `openai_output_limit`: contenido no válido, incompleto o truncado por tokens.
+- `openai_output_invalid` / `openai_report_invalid` / `openai_usage_invalid`: error de estructura o uso.
+- `shadow_storage_unavailable`: persistencia local no disponible.
+
+Si OpenAI devuelve `usage` íntegro en una respuesta incompleta, se conserva el consumo medido aunque no exista reporte. **Cero tokens registrados no significa necesariamente cero tokens facturados**: si no hubo `usage`, el consumo sigue siendo desconocido y se cuenta una reserva de 1000 tokens para el presupuesto local. No volver a enviar automáticamente una petición fallida en la misma ventana de seis horas.
+
+Consulta *solo lectura* como root para validar la próxima ejecución:
+
+```bash
+python3 - <<'PY'
+import sqlite3
+p="file:/var/lib/private/hache-trader-ai-shadow/ai-shadow.sqlite?mode=ro"
+with sqlite3.connect(p, uri=True) as db:
+    for row in db.execute("SELECT observed_at,status,error_code,input_tokens,output_tokens,total_tokens FROM runs ORDER BY observed_at DESC LIMIT 8"):
+        print(row)
+PY
+```
+
+El registro de systemd también escribe únicamente `{"status":"failed","error_code":"..."}`; nunca se muestra una excepción que pueda contener secretos. Para investigar fallos, usar el código estructurado, sin activar logging detallado de cabeceras o peticiones HTTP.
+
 ## Despliegue con revisión y rollback
 
 No desplegar antes de que PR/CI/revisiones estén aprobados. Usar release exacto por SHA, con el flujo existente `deployment/upgrade-telegram-trial.sh` (respaldo SQLite y rollback), y comprobar que el bot sigue siendo el único consumidor Telegram. El upgrade del motor reinicia el servicio en pausa; coordinar antes.
