@@ -88,9 +88,9 @@ def entry_plan(market, book, signal, quote_volume, policy, now, *,
     notional = money(policy.max_order)
     if notional_cap is not None:
         cap = money(notional_cap)
-        if cap <= 0 or cap > notional:
+        if cap <= 0:
             raise GuardError("invalid_study_notional")
-        notional = cap
+        notional = min(notional, cap)
     quantity = market.quantity(notional / (price * (1 + market.fee)))
     market.validate_order(quantity, price)
     # Both sides must support this size at the conservative participation fraction.
