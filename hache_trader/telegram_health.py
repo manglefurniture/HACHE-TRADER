@@ -13,7 +13,7 @@ _TELEGRAM_FAILURES = frozenset((
 
 
 def record_telegram_failure(store, now, reason):
-    """Pause immediately, but don't append a new event on every retry."""
+    """Pause on sustained transient failures or immediately on critical errors."""
     code = reason if reason in _TELEGRAM_FAILURES else "telegram_control_error"
     with store.transaction():
         state = store.read()
