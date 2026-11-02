@@ -11,6 +11,7 @@ import sqlite3
 import stat
 import time
 import urllib.request
+import urllib.error
 
 from .domain import GuardError, money
 from .safetrade import NoRedirect, SafeTrade
@@ -22,6 +23,47 @@ MAX_DAILY_CALLS, MAX_MONTHLY_CALLS = 4, 100
 MAX_DAILY_TOKENS, MAX_MONTHLY_TOKENS = 4000, 80000
 MAX_OUTPUT_TOKENS = 450
 SLOT_SECONDS = 6 * 3600
+
+# Fixed, non-sensitive diagnostic codes. Never persist exception messages,
+# provider response bodies, request URLs, authentication values or tracebacks.
+PROVIDER_FAILURES = frozenset((
+    "openai_http_400", "openai_http_401", "openai_http_403",
+    "openai_http_408", "openai_http_422", "openai_http_429",
+    "openai_http_5xx", "openai_http_other",
+    "openai_timeout", "openai_network_unavailable",
+    "openai_response_too_large", "openai_response_invalid",
+    "openai_json_invalid", "openai_response_incomplete",
+    "openai_output_limit", "openai_output_invalid",
+    "openai_report_invalid", "openai_usage_invalid",
+    "public_snapshot_too_large",
+))
+
+
+class ShadowProviderError(GuardError):
+    """Provider failure with optional verified usage; never carries raw data."""
+
+    def __init__(self, code, usage=None):
+        super().__init__(code)
+        self.usage = usage
+
+
+def _http_code(status):
+    if status in (400, 401, 403, 408, 422, 429):
+        return "openai_http_" + str(status)
+    if type(status) is int and 500 <= status <= 599:
+        return "openai_http_5xx"
+    return "openai_http_other"
+
+
+def _verified_usage(output):
+    if not isinstance(output, dict) or not isinstance(output.get("usage"), dict):
+        return None
+    usage = output["usage"]
+    fields = ("input_tokens", "output_tokens", "total_tokens")
+    if (any(type(usage.get(k)) is not int or usage[k] < 0 for k in fields)
+            or usage["total_tokens"] < usage["input_tokens"] + usage["output_tokens"]):
+        return None
+    return {k: usage[k] for k in fields}
 
 REPORT_SCHEMA = {
     "type": "object", "additionalProperties": False,
