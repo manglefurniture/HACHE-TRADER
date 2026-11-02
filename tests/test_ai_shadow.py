@@ -1,5 +1,6 @@
 """Offline safety, idempotency, provider and quota tests. No live API usage."""
 import json
+import urllib.error
 from pathlib import Path
 import sqlite3
 import tempfile
@@ -148,11 +149,14 @@ class ShadowTests(unittest.TestCase):
     def test_failed_provider_attempt_is_recorded_once_without_leak(self):
         def unavailable(req, timeout):
             raise OSError("sensitive sk-DO_NOT_PRINT")
-        with self.assertRaisesRegex(GuardError, "shadow_analysis_unavailable") as error:
+        with self.assertRaisesRegex(GuardError, "openai_network_unavailable") as error:
             self.run_shadow(unavailable)
         self.assertNotIn("DO_NOT_PRINT", str(error.exception))
         with sqlite3.connect(self.db) as db:
-            self.assertEqual(db.execute("SELECT status FROM runs").fetchone()[0], "failed")
+            status, code = db.execute("SELECT status,error_code FROM runs").fetchone()
+            self.assertEqual((status, code), ("failed", "openai_network_unavailable"))
+            self.assertNotIn("DO_NOT_PRINT", str(db.execute(
+                "SELECT status,error_code,snapshot,report FROM runs").fetchone()))
         retry_provider = OpenAIFake()
         repeated = self.run_shadow(retry_provider)
         self.assertEqual(repeated["previous_status"], "failed")
@@ -180,7 +184,7 @@ class ShadowTests(unittest.TestCase):
 
     def test_openai_credentials_must_not_be_world_readable(self):
         self.key.chmod(0o644)
-        with self.assertRaisesRegex(GuardError, "shadow_analysis_unavailable"):
+        with self.assertRaisesRegex(GuardError, "credential_invalid"):
             self.run_shadow(OpenAIFake())
 
     def test_no_data_no_openai_request(self):
@@ -188,7 +192,7 @@ class ShadowTests(unittest.TestCase):
             def markets(self):
                 return []
         provider = OpenAIFake()
-        with self.assertRaisesRegex(GuardError, "shadow_analysis_unavailable"):
+        with self.assertRaisesRegex(GuardError, "public_data_unavailable"):
             self.run_shadow(provider, api=Empty())
         self.assertEqual(len(provider.requests), 0)
 
