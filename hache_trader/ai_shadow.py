@@ -297,13 +297,18 @@ def run_once(db_path, credential_dir, *, api=None, clock=time.time, transport=No
         db.execute("INSERT INTO runs(slot,observed_at,snapshot,status) VALUES(?,?,?,?)",
                    (slot, now, "{}", "reserved"))
         db.commit()  # idempotency and quota reservation BEFORE network I/O
+        stage = "public_data"
         try:
             snapshot = collect_public_snapshot(api or SafeTrade(), now=int(clock()))
             source = json.dumps(snapshot, sort_keys=True, separators=(",", ":"))
             db.execute("UPDATE runs SET snapshot=?,status='public_data_ready' WHERE slot=?",
                        (source, slot))
             db.commit()
-            report, usage = analyze(snapshot, _credential(credential_dir), transport=transport)
+            stage = "credential"
+            key = _credential(credential_dir)
+            stage = "openai"
+            report, usage = analyze(snapshot, key, transport=transport)
+            stage = "storage"
             db.execute("""UPDATE runs SET status='completed',report=?,input_tokens=?,
                           output_tokens=?,total_tokens=? WHERE slot=?""",
                        (json.dumps(report, ensure_ascii=False, sort_keys=True),
@@ -311,11 +316,27 @@ def run_once(db_path, credential_dir, *, api=None, clock=time.time, transport=No
             db.commit()
             return {"status": "completed", "markets": len(snapshot["markets"]),
                     "usage": usage, "snapshot_sha256": hashlib.sha256(source.encode()).hexdigest()}
-        except (GuardError, OSError, ValueError, KeyError, TypeError):
-            db.execute("UPDATE runs SET status='failed',error_code='observer_or_provider_unavailable' WHERE slot=?",
-                       (slot,))
+        except (GuardError, OSError, ValueError, KeyError, TypeError, ArithmeticError) as exc:
+            if stage == "public_data":
+                code = "public_data_unavailable"
+            elif stage == "credential":
+                code = ("credential_invalid" if isinstance(exc, GuardError)
+                        else "credential_unavailable")
+            elif stage == "openai":
+                candidate = str(exc) if isinstance(exc, GuardError) else ""
+                code = candidate if candidate in PROVIDER_FAILURES else "openai_response_invalid"
+            else:
+                code = "shadow_storage_unavailable"
+            # Incomplete responses may nevertheless have consumed real tokens.
+            # Store verified usage if supplied; leave zero as unknown otherwise.
+            usage = exc.usage if isinstance(exc, ShadowProviderError) else None
+            db.execute("""UPDATE runs SET status='failed',error_code=?,
+                          input_tokens=?,output_tokens=?,total_tokens=? WHERE slot=?""",
+                       (code, (usage or {}).get("input_tokens", 0),
+                        (usage or {}).get("output_tokens", 0),
+                        (usage or {}).get("total_tokens", 0), slot))
             db.commit()
-            raise GuardError("shadow_analysis_unavailable") from None
+            raise GuardError(code) from None
 
 
 def main():
@@ -330,8 +351,18 @@ def main():
         raise SystemExit("openai_credential_directory_missing")
     try:
         print(json.dumps(run_once(root / "ai-shadow.sqlite", creds), sort_keys=True))
-    except (GuardError, OSError, sqlite3.Error):
-        raise SystemExit("shadow_analysis_unavailable") from None
+    except GuardError as exc:
+        # Never print raw provider or OS errors; only fixed, audited codes.
+        allowed = PROVIDER_FAILURES | {
+            "public_data_unavailable", "credential_invalid", "credential_unavailable",
+            "shadow_storage_unavailable", "shadow_slot_already_attempted",
+            "openai_local_budget_exhausted", "shadow_state_directory_unavailable",
+        }
+        code = str(exc) if str(exc) in allowed else "shadow_analysis_unavailable"
+        print(json.dumps({"status": "failed", "error_code": code}, sort_keys=True))
+        raise SystemExit(1) from None
+    except (OSError, sqlite3.Error):
+        raise SystemExit("shadow_storage_unavailable") from None
 
 
 if __name__ == "__main__":
