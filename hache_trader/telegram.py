@@ -72,12 +72,20 @@ class TelegramAPI:
                 if len(raw) > 262144:
                     raise GuardError("telegram_response_too_large")
                 result = json.loads(raw)
+            if not isinstance(result, dict) or "result" not in result:
+                raise GuardError("telegram_response_invalid")
             if result.get("ok") is not True:
                 raise GuardError("telegram_rejected")
             return result["result"]
-        except (OSError, ValueError, KeyError):
+        except GuardError:
             self.retry_at = self.clock() + 60
-            # Never surface the request URL (contains bot token) or provider body.
+            raise
+        except (ValueError, KeyError, TypeError):
+            self.retry_at = self.clock() + 60
+            raise GuardError("telegram_response_invalid") from None
+        except OSError:
+            self.retry_at = self.clock() + 60
+            # Never surface the URL (contains bot token) or provider body.
             raise GuardError("telegram_unavailable") from None
 
 

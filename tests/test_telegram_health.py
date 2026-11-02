@@ -33,10 +33,15 @@ class TelegramHealthTests(unittest.TestCase):
         ).fetchone()[0]
 
     def test_outage_pauses_once_not_every_two_seconds(self):
-        self.assertTrue(record_telegram_failure(self.store, NOW+1, "telegram_unavailable"))
-        for n in range(2, 32, 2):
+        self.assertFalse(record_telegram_failure(self.store, NOW+1, "telegram_unavailable"))
+        self.assertFalse(self.store.read()["paused"])
+        self.assertEqual(self.store.read()["telegram_connection"], "degraded")
+        self.assertEqual(self.events("telegram_transient_failure"), 1)
+        for n in range(2, 90, 2):
             self.assertFalse(record_telegram_failure(
                 self.store, NOW+n, "telegram_cooldown"))
+        self.assertFalse(record_telegram_failure(self.store, NOW+90, "telegram_cooldown"))
+        self.assertTrue(record_telegram_failure(self.store, NOW+91, "telegram_cooldown"))
         self.assertEqual(self.events("telegram_connection_lost"), 1)
         self.assertEqual(self.events("pause"), 0)
         s = self.store.read()
@@ -50,40 +55,42 @@ class TelegramHealthTests(unittest.TestCase):
             "SELECT count(*) FROM outbox WHERE id LIKE 'telegram:pause:%'"
         ).fetchone()[0], 1)
         with self.assertRaisesRegex(GuardError, "resume_requires_telegram_connection"):
-            self.store.control("resume", NOW+32)
-        text = render(self.store, "estado", NOW+32, self.policy, runtime_mode="trial")
+            self.store.control("resume", NOW+92)
+        text = render(self.store, "estado", NOW+92, self.policy, runtime_mode="trial")
         self.assertIn("Telegram: conexión interrumpida", text)
 
     def test_recovery_is_not_automatic_resume(self):
         record_telegram_failure(self.store, NOW+1, "telegram_unavailable")
-        self.assertTrue(record_telegram_recovery(self.store, NOW+33))
-        self.assertFalse(record_telegram_recovery(self.store, NOW+35))
+        record_telegram_failure(self.store, NOW+91, "telegram_cooldown")
+        self.assertTrue(record_telegram_recovery(self.store, NOW+93))
+        self.assertFalse(record_telegram_recovery(self.store, NOW+95))
         self.assertEqual(self.events("telegram_connection_restored"), 1)
         s = self.store.read()
         self.assertTrue(s["paused"])
         self.assertTrue(s["telegram_resume_required"])
         self.assertEqual(s["telegram_connection"], "connected")
-        text = render(self.store, "estado", NOW+35, self.policy, runtime_mode="trial")
+        text = render(self.store, "estado", NOW+95, self.policy, runtime_mode="trial")
         self.assertIn("recuperada; requiere /reanudar", text)
         rows = self.store.db.execute(
             "SELECT body FROM outbox WHERE id LIKE 'telegram:restored:%'"
         ).fetchall()
         self.assertEqual(len(rows), 1)
         self.assertIn("PAUSADAS", json.loads(rows[0]["body"])["text"])
-        self.store.control("resume", NOW+35)
+        self.store.control("resume", NOW+95)
         self.assertFalse(self.store.read()["paused"])
         self.assertFalse(self.store.read()["telegram_resume_required"])
 
     def test_existing_manual_pause_not_mistaken_for_auto_resume(self):
         self.store.control("pause", NOW)
-        self.assertTrue(record_telegram_failure(self.store, NOW+1, "telegram_unavailable"))
+        self.assertFalse(record_telegram_failure(self.store, NOW+1, "telegram_unavailable"))
         self.assertFalse(self.store.read()["telegram_resume_required"])
         record_telegram_recovery(self.store, NOW+2)
         self.assertTrue(self.store.read()["paused"])
         self.assertEqual(self.store.db.execute(
             "SELECT count(*) FROM outbox WHERE id LIKE 'telegram:pause:%'"
         ).fetchone()[0], 0)
-        self.assertEqual(self.events("telegram_connection_lost"), 1)
+        self.assertEqual(self.events("telegram_connection_lost"), 0)
+        self.assertEqual(self.events("telegram_transient_recovered"), 1)
 
 
 if __name__ == "__main__":
