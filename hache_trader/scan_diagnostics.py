@@ -35,6 +35,7 @@ _DECISIONS = {
     "emergency": "emergencia activa",
     "position_present": "posición existente o cerrada durante el ciclo",
     "daily_limit": "límite de entradas diarias alcanzado",
+    "study_daily_limit": "máximo de una prueba exploratoria diaria alcanzado",
     "stop_file": "parada de seguridad activa",
     "duplicate_entry_id": "entrada del mismo mercado y minuto ya evaluada",
     "entry_filled": "entrada ficticia ejecutada al menos parcialmente",
