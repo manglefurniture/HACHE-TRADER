@@ -6,10 +6,10 @@ import unittest
 
 from hache_trader.domain import GuardError, Policy, money
 from hache_trader.runtime import Worker
-from hache_trader.safetrade import SafeTrade
+from hache_trader.safetrade import SafeTrade, market_from_api
 from hache_trader.store import Store
 from hache_trader.strategy import signals, study_signals, entry_plan
-from test_core import NOW
+from test_core import NOW, book
 from test_worker import MarketStub
 
 
@@ -95,7 +95,7 @@ class LearningTests(unittest.TestCase):
         api=ProbeMarket(valid_period=5)
         worker=Worker(self.store,self.policy,api,self.root/"STOP",clock=lambda:api.now)
         self.assertTrue(worker.cycle())
-        self.assertEqual(api.candle_calls,[1,5])
+        self.assertEqual(api.candle_calls,[1,5,15])
         self.assertEqual(self.store.read()["orders"],{})
         self.store.control("resume",api.now)
         self.assertTrue(worker.cycle())
@@ -110,6 +110,49 @@ class LearningTests(unittest.TestCase):
             "SELECT decision FROM scan_diagnostics ORDER BY id DESC LIMIT 1").fetchone()[0],
                          "entry_filled")
         self.assertTrue(any("5m" in x["status"] for x in self.store.read()["markets"]))
+
+    def test_real_signal_on_fifteen_minute_outranks_five_minute_study(self):
+        class MixedSignals(MarketStub):
+            def __init__(self):
+                super().__init__()
+                self.candle_calls = []
+            def candles(self, market, *, period=1):
+                self.candle_calls.append(period)
+                if period == 1:
+                    raise GuardError("insufficient_candles")
+                return bars(self.now, period*60, study=(period == 5))
+        api=MixedSignals()
+        worker=Worker(self.store,self.policy,api,self.root/"STOP",clock=lambda:api.now)
+        self.assertTrue(worker.cycle())
+        self.assertEqual(api.candle_calls,[1,5,15])
+        self.assertIn("candidato trend (15m",self.store.read()["markets"][0]["status"])
+        self.store.control("resume",api.now)
+        # A consumed study quota must NOT hide a regular 15m trend.
+        with self.store.transaction():
+            state=self.store.read()
+            state["orders"]["entry:abcusdt:111:study_probe"]={
+                "side":"buy","created":NOW,"market":"abcusdt",
+                "status":"cancelled","reserve":"0",
+            }
+            self.store.save(state,"study_quota_used_fixture",{},api.now)
+        self.assertTrue(worker.cycle())
+        orders=[(key,v) for key,v in self.store.read()["orders"].items()
+                if v["side"]=="buy" and v.get("status")=="filled"]
+        self.assertEqual(len(orders),1)
+        self.assertTrue(orders[0][0].endswith(":trend"))
+
+    def test_study_cap_respects_stricter_policy(self):
+        policy=Policy(max_order="5")
+        market=market_from_api(MarketStub().markets()[0],Decimal("0.001"))
+        sig=study_signals(bars(NOW,300,study=True),NOW,300)[0]
+        plan=entry_plan(market,book(NOW),sig,Decimal("20000"),policy,NOW,
+                        notional_cap="10",target_cap="0.20")
+        cost=plan["quantity"]*plan["price"]*(1+market.fee)
+        self.assertLessEqual(cost,Decimal("5"))
+        self.assertGreater(cost,0)
+        with self.assertRaisesRegex(GuardError,"invalid_study_notional"):
+            entry_plan(market,book(NOW),sig,Decimal("20000"),policy,NOW,
+                       notional_cap="0")
 
     def test_study_probe_strict_one_per_local_day(self):
         api=ProbeMarket()
