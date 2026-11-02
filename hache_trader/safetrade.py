@@ -104,9 +104,18 @@ class SafeTrade:
         except (KeyError, TypeError, ValueError):
             raise GuardError("depth_schema_unverified") from None
 
-    def candles(self, market):
+    def candles(self, market, *, period=1):
+        # Only native, provider-backed intervals. Never synthesize candles from
+        # sparse trades, forward-fill gaps or treat zero volume as liquidity.
+        if type(period) is not int or period not in (1, 5, 15):
+            raise GuardError("unsupported_candle_interval")
         now = int(self.clock())
-        return self.get(f"/trade/public/markets/{market}/k-line", {"period": 1, "limit": 30, "time_from": now - 1800, "time_to": now})
+        limit = 30 if period == 1 else 40
+        return self.get(f"/trade/public/markets/{market}/k-line", {
+            "period": period, "limit": limit,
+            "time_from": now - limit * period * 60,
+            "time_to": now,
+        })
 
     def ticker(self, market):
         raw = self.get(f"/trade/public/tickers/{market}")
