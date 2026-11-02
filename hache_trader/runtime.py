@@ -9,6 +9,7 @@ from .reports import report
 from .safetrade import market_from_api
 from .strategy import signals, entry_plan
 from .store import local_day
+from .scan_diagnostics import append_scan
 
 
 class ProcessLock:
@@ -124,6 +125,7 @@ class Worker:
                 eligible.append(ident)
                 statuses.append({"market": ident, "status": "pendiente de análisis de profundidad y velas"})
         candidates = []
+        signal_markets = 0
         # Rotate bounded batches so a large universe cannot starve exit/Telegram checks.
         batch = [eligible[(self.offset+i) % len(eligible)] for i in range(min(5, len(eligible)))] if eligible else []
         self.offset = (self.offset + len(batch)) % max(1, len(eligible))
@@ -138,6 +140,7 @@ class Worker:
                 if not choices:
                     status["status"] = "sin señal explicable"
                     continue
+                signal_markets += 1
                 plan = entry_plan(market, book, choices[0], money(tickers[ident]["volume"]), self.policy, int(self.clock()))
                 candidates.append((choices[0].score, market, plan, candles))
                 status["status"] = "candidato " + choices[0].strategy + " (beneficio no garantizado)"
@@ -162,6 +165,21 @@ class Worker:
             1 for o in s["orders"].values()
             if o["side"] == "buy" and local_day(o["created"]) == local_day(now)
         )
+        # Explain the decision without affecting whether an entry is allowed.
+        if not candidates:
+            diagnostic_decision = "no_qualified_opportunity"
+        elif entries_today >= 3:
+            diagnostic_decision = "daily_limit"
+        elif had_position_at_start or s["position"]:
+            diagnostic_decision = "position_present"
+        elif s["paused"]:
+            diagnostic_decision = "paused"
+        elif s["emergency"]:
+            diagnostic_decision = "emergency"
+        elif self.engine.kill_file.exists():
+            diagnostic_decision = "stop_file"
+        else:
+            diagnostic_decision = None
         if (candidates and entries_today < 3 and not had_position_at_start
                 and not s["position"] and not s["paused"] and not s["emergency"]
                 and not self.engine.kill_file.exists()):
@@ -182,11 +200,18 @@ class Worker:
                 self.engine.submit(ident, market, "buy", plan["quantity"], plan["price"], now,
                                    stop=plan["stop"], target=plan["target"], expected_loss=plan["expected_loss"])
                 execution_book = self.api.book(market.id)
-                self.engine.match(ident, market, execution_book, int(self.clock()))
+                filled = self.engine.match(ident, market, execution_book, int(self.clock()))
                 self.engine.cancel(ident, int(self.clock()))
+                diagnostic_decision = "entry_filled" if filled > 0 else "entry_unfilled"
                 with self.store.transaction():
                     self.store.enqueue(ident, {"text": "SIMULACIÓN · Entrada procesada en " + market.id + ". Consulta /historial; puede ser parcial o no ejecutada."})
+            else:
+                diagnostic_decision = "duplicate_entry_id"
         with self.store.transaction():
+            append_scan(self.store, int(self.clock()), statuses=statuses,
+                        eligible=len(eligible), checked=len(batch),
+                        signals=signal_markets, candidates=len(candidates),
+                        decision=diagnostic_decision)
             day = local_day(now)
             self.store.enqueue("daily:"+day, {"text": "SIMULACIÓN · Informe diario\n" + json.dumps(report(self.store, now, "day"), ensure_ascii=False)[:3000]})
         return True
