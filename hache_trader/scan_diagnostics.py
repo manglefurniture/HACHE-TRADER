@@ -6,8 +6,6 @@ Store transaction. Only fixed reason codes are persisted.
 """
 from collections import Counter
 import json
-import re
-
 from .store import local_day
 
 MAX_REASON_CODES = 25
@@ -41,6 +39,7 @@ _DECISIONS = {
     "duplicate_entry_id": "entrada del mismo mercado y minuto ya evaluada",
     "entry_filled": "entrada ficticia ejecutada al menos parcialmente",
     "entry_unfilled": "orden ficticia enviada sin ejecución",
+    "other_safety_gate": "otra condición de seguridad impidió la entrada",
 }
 
 
