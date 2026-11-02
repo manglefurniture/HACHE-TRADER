@@ -47,7 +47,36 @@ def signals(candles, now, period=60):
     return sorted(results, key=lambda x: x.score, reverse=True)
 
 
-def entry_plan(market, book, signal, quote_volume, policy, now):
+
+
+def study_signals(candles, now, period):
+    """One measured micro-experiment when no trend/pullback signal exists.
+
+    Only 5m/15m VALIDATED, CLOSED, consecutive, positive-volume data.
+    It records an explicitly exploratory idea; it is not learned alpha.
+    """
+    if period not in (300, 900):
+        return []
+    if signals(candles, now, period=period):
+        return []
+    closed = [r for r in candles if r[0] + period <= now][-20:]
+    prices = [money(r[4]) for r in closed]
+    fast = sum(prices[-5:]) / 5
+    slow = sum(prices) / 20
+    volatility = max((money(r[2]) - money(r[3])) / money(r[4])
+                     for r in closed)
+    # A positive closed candle near the 20-bar mean, excluding sharp drops.
+    if (prices[-1] > prices[-2] and
+            fast >= slow * money("0.985") and
+            prices[-1] >= fast * money("0.99") and
+            volatility <= money("0.03")):
+        return [Signal("study_probe", fast / slow - 1, volatility,
+                       "Exploratory closed-candle recovery; learning sample only")]
+    return []
+
+
+def entry_plan(market, book, signal, quote_volume, policy, now, *,
+               notional_cap=None, target_cap=None):
     book.fresh(now, policy.max_age)
     if book.market != market.id or not market.verified:
         raise GuardError("unverified_market")
@@ -56,7 +85,13 @@ def entry_plan(market, book, signal, quote_volume, policy, now):
     if signal.volatility > money(policy.max_volatility):
         raise GuardError("excessive_volatility")
     price = market.price(book.asks[0][0] * (1 + money(policy.max_slippage)))
-    quantity = market.quantity(money(policy.max_order) / (price * (1 + market.fee)))
+    notional = money(policy.max_order)
+    if notional_cap is not None:
+        cap = money(notional_cap)
+        if cap <= 0 or cap > notional:
+            raise GuardError("invalid_study_notional")
+        notional = cap
+    quantity = market.quantity(notional / (price * (1 + market.fee)))
     market.validate_order(quantity, price)
     # Both sides must support this size at the conservative participation fraction.
     buy_depth = sum((q for p, q in book.asks if p <= price), money(0)) * money(policy.participation)
@@ -70,9 +105,15 @@ def entry_plan(market, book, signal, quote_volume, policy, now):
     loss = cost - quantity * stop * (1 - money(policy.max_slippage)) * (1 - market.fee)
     if loss > money(policy.trade_loss):
         raise GuardError("predicted_loss_exceeds_limit")
-    target = market.price((cost + money(policy.target_net)) / (quantity * (1 - market.fee)))
+    target_net = money(policy.target_net)
+    if target_cap is not None:
+        candidate = money(target_cap)
+        if candidate < money("0.20") or candidate > target_net:
+            raise GuardError("invalid_study_target")
+        target_net = candidate
+    target = market.price((cost + target_net) / (quantity * (1 - market.fee)))
     # Round target upward by a tick so net target is not overstated.
-    if quantity * target * (1 - market.fee) - cost < money(policy.target_net):
+    if quantity * target * (1 - market.fee) - cost < target_net:
         target += Decimal(1).scaleb(-market.price_precision)
     return {"quantity": quantity, "price": price, "stop": stop, "target": target,
             "expected_loss": loss, "strategy": signal.strategy}
