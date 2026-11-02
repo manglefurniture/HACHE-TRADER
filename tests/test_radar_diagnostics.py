@@ -104,6 +104,30 @@ class RadarDiagnosticsTests(unittest.TestCase):
         finally:
             restarted.close()
 
+    def test_emergency_has_priority_over_generic_pause(self):
+        self.worker.cycle()
+        self.store.control("emergency", self.api.now)
+        self.assertTrue(self.worker.cycle())
+        self.assertEqual(self.scan_rows()[-1]["decision"], "emergency")
+        self.assertTrue(self.store.read()["paused"])
+        self.assertTrue(self.store.read()["emergency"])
+
+    def test_engine_daily_loss_gate_is_recorded_before_fail_closed(self):
+        self.worker.cycle()
+        self.store.control("resume", self.api.now)
+        with self.store.transaction():
+            state = self.store.read()
+            state["day_loss"] = "1.49"
+            self.store.save(state, "loss_budget_fixture", {}, self.api.now)
+        self.assertFalse(self.worker.cycle())
+        self.assertTrue(self.store.read()["paused"])
+        row = self.scan_rows()[-1]
+        self.assertEqual(row["decision"], "risk_daily_loss")
+        self.assertEqual(row["qualified"], 1)
+        self.assertEqual(self.store.read()["orders"], {})
+        self.assertIn("presupuesto de pérdidas diario agotado",
+                      render_diagnostics(self.store, self.api.now))
+
     def test_optional_diagnostic_error_never_pauses_worker(self):
         with patch("hache_trader.runtime.append_scan", side_effect=ValueError("fixture")):
             self.assertTrue(self.worker.cycle())
