@@ -1,6 +1,7 @@
 """Continuous multi-market paper worker. Market errors stop new entries."""
 import json
 import os
+import sqlite3
 from pathlib import Path
 import time
 from .domain import GuardError, money
@@ -179,7 +180,7 @@ class Worker:
         elif self.engine.kill_file.exists():
             diagnostic_decision = "stop_file"
         else:
-            diagnostic_decision = None
+            diagnostic_decision = "other_safety_gate"
         if (candidates and entries_today < 3 and not had_position_at_start
                 and not s["position"] and not s["paused"] and not s["emergency"]
                 and not self.engine.kill_file.exists()):
@@ -208,10 +209,16 @@ class Worker:
             else:
                 diagnostic_decision = "duplicate_entry_id"
         with self.store.transaction():
-            append_scan(self.store, int(self.clock()), statuses=statuses,
-                        eligible=len(eligible), checked=len(batch),
-                        signals=signal_markets, candidates=len(candidates),
-                        decision=diagnostic_decision)
             day = local_day(now)
             self.store.enqueue("daily:"+day, {"text": "SIMULACIÓN · Informe diario\n" + json.dumps(report(self.store, now, "day"), ensure_ascii=False)[:3000]})
+        # Diagnostic storage is deliberately best-effort and never permitted
+        # to pause trading or change an already executed paper trade.
+        try:
+            with self.store.transaction():
+                append_scan(self.store, int(self.clock()), statuses=statuses,
+                            eligible=len(eligible), checked=len(batch),
+                            signals=signal_markets, candidates=len(candidates),
+                            decision=diagnostic_decision)
+        except (sqlite3.Error, ValueError, RuntimeError):
+            pass
         return True
