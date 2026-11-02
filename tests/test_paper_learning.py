@@ -140,9 +140,10 @@ class LearningTests(unittest.TestCase):
                 raise GuardError("future_candle")
         api=Fatal()
         worker=Worker(self.store,self.policy,api,self.root/"STOP",clock=lambda:api.now)
-        self.assertFalse(worker.cycle())
-        self.assertTrue(self.store.read()["paused"])
-        self.assertEqual(self.store.read()["last_error"],"market_or_execution_unavailable")
+        self.assertTrue(worker.cycle())
+        self.assertIn("future_candle", self.store.read()["markets"][0]["status"])
+        self.assertEqual(self.store.read()["orders"], {})
+        self.assertIsNone(self.store.read()["last_error"])
 
 
 if __name__ == "__main__":
