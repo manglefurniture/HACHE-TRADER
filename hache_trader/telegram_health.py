@@ -55,9 +55,14 @@ def record_telegram_recovery(store, now):
     """Recovery never automatically resumes simulated orders."""
     with store.transaction():
         state = store.read()
-        if state.get("telegram_connection") != "unavailable":
+        connection = state.get("telegram_connection")
+        if connection not in ("degraded", "unavailable"):
             return False
         state["telegram_connection"] = "connected"
+        state["telegram_failure_since"] = None
+        if connection == "degraded":
+            store.save(state, "telegram_transient_recovered", {}, now)
+            return True
         store.save(state, "telegram_connection_restored", {}, now)
         store.enqueue("telegram:restored:" + str(now), {
             "text": "SIMULACIÓN · Telegram recuperó la conexión. "
