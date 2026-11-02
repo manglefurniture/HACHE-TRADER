@@ -75,6 +75,17 @@ class Worker:
             s["marks"][market.id] = {"bid": str(book.bids[0][0]), "fee": str(market.fee), "at": book.timestamp}
             self.store.save(s, "market_mark", {"market": market.id}, int(self.clock()))
 
+    def _save_diagnostic(self, statuses, eligible, batch, signals, candidates, decision):
+        # Observability must never change an execution or pause the engine.
+        try:
+            with self.store.transaction():
+                append_scan(self.store, int(self.clock()), statuses=statuses,
+                            eligible=len(eligible), checked=len(batch),
+                            signals=signals, candidates=len(candidates),
+                            decision=decision)
+        except (sqlite3.Error, ValueError, RuntimeError):
+            pass
+
     def cycle(self):
         try:
             return self._cycle()
@@ -181,44 +192,54 @@ class Worker:
             diagnostic_decision = "stop_file"
         else:
             diagnostic_decision = "other_safety_gate"
-        if (candidates and entries_today < 3 and not had_position_at_start
-                and not s["position"] and not s["paused"] and not s["emergency"]
-                and not self.engine.kill_file.exists()):
-            _, market, _, candles = max(candidates, key=lambda x: (x[0], x[1].id))
-            # Revalidate the winning market after the batch; never execute old depth.
-            stamp, volume = self.api.ticker(market.id)
-            book = self.api.book(market.id)
-            now = int(self.clock())
-            if not 0 <= now - stamp <= self.policy.max_age:
-                raise GuardError("stale_ticker")
-            choice = signals(candles, now)[0]
-            plan = entry_plan(market, book, choice, volume, self.policy, now)
-            ident = f"entry:{market.id}:{now//60}:{choice.strategy}"
-            # A decision for the same market/minute/strategy is one-shot even
-            # after a fill, cancel or restart. Do not reuse its ID with new
-            # price/quantity terms or execute the historical order again.
-            if ident not in self.store.read()["orders"]:
-                self.engine.submit(ident, market, "buy", plan["quantity"], plan["price"], now,
-                                   stop=plan["stop"], target=plan["target"], expected_loss=plan["expected_loss"])
-                execution_book = self.api.book(market.id)
-                filled = self.engine.match(ident, market, execution_book, int(self.clock()))
-                self.engine.cancel(ident, int(self.clock()))
-                diagnostic_decision = "entry_filled" if filled > 0 else "entry_unfilled"
-                with self.store.transaction():
-                    self.store.enqueue(ident, {"text": "SIMULACIÓN · Entrada procesada en " + market.id + ". Consulta /historial; puede ser parcial o no ejecutada."})
-            else:
-                diagnostic_decision = "duplicate_entry_id"
+        try:
+            if (candidates and entries_today < 3 and not had_position_at_start
+                    and not s["position"] and not s["paused"] and not s["emergency"]
+                    and not self.engine.kill_file.exists()):
+                _, market, _, candles = max(candidates, key=lambda x: (x[0], x[1].id))
+                # Revalidate the winning market after the batch; never execute old depth.
+                stamp, volume = self.api.ticker(market.id)
+                book = self.api.book(market.id)
+                now = int(self.clock())
+                if not 0 <= now - stamp <= self.policy.max_age:
+                    raise GuardError("stale_ticker")
+                choice = signals(candles, now)[0]
+                plan = entry_plan(market, book, choice, volume, self.policy, now)
+                ident = f"entry:{market.id}:{now//60}:{choice.strategy}"
+                # A decision for the same market/minute/strategy is one-shot even
+                # after a fill, cancel or restart. Do not reuse its ID with new
+                # price/quantity terms or execute the historical order again.
+                if ident not in self.store.read()["orders"]:
+                    self.engine.submit(ident, market, "buy", plan["quantity"], plan["price"], now,
+                                       stop=plan["stop"], target=plan["target"], expected_loss=plan["expected_loss"])
+                    execution_book = self.api.book(market.id)
+                    filled = self.engine.match(ident, market, execution_book, int(self.clock()))
+                    self.engine.cancel(ident, int(self.clock()))
+                    diagnostic_decision = "entry_filled" if filled > 0 else "entry_unfilled"
+                    with self.store.transaction():
+                        self.store.enqueue(ident, {"text": "SIMULACIÓN · Entrada procesada en " + market.id + ". Consulta /historial; puede ser parcial o no ejecutada."})
+                else:
+                    diagnostic_decision = "duplicate_entry_id"
+        except (GuardError, KeyError, TypeError, OSError, ArithmeticError) as exc:
+            # Preserve the existing fail-closed behavior while recording which
+            # deterministic risk gate prevented the simulated entry.
+            risk = {
+                "daily_loss_budget_exhausted": "risk_daily_loss",
+                "risk_plan_understates_loss": "risk_plan_rejected",
+                "exposure_or_cash_exceeded": "risk_exposure",
+                "paper_daily_entry_limit": "daily_limit",
+                "entries_blocked": "execution_blocked",
+                "stale_ticker": "execution_data_invalid",
+                "stale_worker": "execution_data_invalid",
+            }
+            code = str(exc) if isinstance(exc, GuardError) else ""
+            diagnostic_decision = risk.get(code, "execution_validation_failed")
+            self._save_diagnostic(statuses, eligible, batch, signal_markets,
+                                  candidates, diagnostic_decision)
+            raise
         with self.store.transaction():
             day = local_day(now)
             self.store.enqueue("daily:"+day, {"text": "SIMULACIÓN · Informe diario\n" + json.dumps(report(self.store, now, "day"), ensure_ascii=False)[:3000]})
-        # Diagnostic storage is deliberately best-effort and never permitted
-        # to pause trading or change an already executed paper trade.
-        try:
-            with self.store.transaction():
-                append_scan(self.store, int(self.clock()), statuses=statuses,
-                            eligible=len(eligible), checked=len(batch),
-                            signals=signal_markets, candidates=len(candidates),
-                            decision=diagnostic_decision)
-        except (sqlite3.Error, ValueError, RuntimeError):
-            pass
+        self._save_diagnostic(statuses, eligible, batch, signal_markets,
+                              candidates, diagnostic_decision)
         return True
