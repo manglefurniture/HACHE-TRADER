@@ -90,6 +90,26 @@ class TelegramOutageGraceTests(unittest.TestCase):
                 finally:
                     test_store.close()
 
+    def test_success_after_grace_deadline_still_requires_manual_resume(self):
+        self.assertFalse(record_telegram_failure(
+            self.store, NOW + 1, "telegram_unavailable"
+        ))
+        self.assertTrue(record_telegram_recovery(self.store, NOW + 92))
+        self.assertTrue(self.store.read()["paused"])
+        self.assertTrue(self.store.read()["telegram_resume_required"])
+        self.assertEqual(self.store.read()["telegram_connection"], "connected")
+        self.assertEqual(self.events("telegram_connection_lost"), 1)
+        self.assertEqual(self.events("telegram_connection_restored"), 1)
+        self.assertEqual(self.events("telegram_transient_recovered"), 0)
+        self.assertEqual(self.store.db.execute(
+            "SELECT count(*) FROM outbox WHERE id LIKE 'telegram:pause:%'"
+        ).fetchone()[0], 1)
+
+    def test_success_at_exact_grace_deadline_fails_closed(self):
+        record_telegram_failure(self.store, NOW + 1, "telegram_unavailable")
+        record_telegram_recovery(self.store, NOW + 91)
+        self.assertTrue(self.store.read()["paused"])
+
     def test_invalid_clock_fails_closed(self):
         record_telegram_failure(self.store, NOW + 10, "telegram_unavailable")
         self.assertTrue(record_telegram_failure(self.store, NOW + 9, "telegram_cooldown"))
