@@ -52,7 +52,7 @@ class RadarDiagnosticsTests(unittest.TestCase):
 
     def test_candle_failure_and_no_signal_are_distinct(self):
         class NoCandles(MarketStub):
-            def candles(self, market):
+            def candles(self, market, *, period=1):
                 raise GuardError("insufficient_candles")
         self.api = NoCandles()
         self.worker = Worker(self.store, self.policy, self.api,
@@ -65,7 +65,7 @@ class RadarDiagnosticsTests(unittest.TestCase):
         self.assertIn("velas insuficientes: 1", render_diagnostics(self.store, self.api.now))
 
         class FlatMarket(MarketStub):
-            def candles(self, market):
+            def candles(self, market, *, period=1):
                 return candles(self.now, trend=False)
         self.api = FlatMarket()
         self.worker = Worker(self.store, self.policy, self.api,
