@@ -173,10 +173,10 @@ class Worker:
             diagnostic_decision = "daily_limit"
         elif had_position_at_start or s["position"]:
             diagnostic_decision = "position_present"
-        elif s["paused"]:
-            diagnostic_decision = "paused"
         elif s["emergency"]:
             diagnostic_decision = "emergency"
+        elif s["paused"]:
+            diagnostic_decision = "paused"
         elif self.engine.kill_file.exists():
             diagnostic_decision = "stop_file"
         else:
