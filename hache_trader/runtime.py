@@ -8,7 +8,7 @@ from .domain import GuardError, money
 from .engine import PaperEngine
 from .reports import report
 from .safetrade import market_from_api
-from .strategy import signals, entry_plan
+from .strategy import signals, study_signals, entry_plan
 from .store import local_day
 from .scan_diagnostics import append_scan
 
@@ -60,6 +60,34 @@ class Worker:
             if len(batch) < 100:
                 return rows
         raise GuardError("fee_pagination_incomplete")
+
+    def _market_signal(self, ident):
+        """Use native timeframe evidence; never synthesize absent candles."""
+        fallback = {"insufficient_candles", "stale_candles",
+                    "candle_gap_or_duplicate", "irregular_volume"}
+        last_error = None
+        valid_data = False
+        for interval in (1, 5, 15):
+            # Preserve compatibility with the existing one-minute provider.
+            candles = (self.api.candles(ident) if interval == 1
+                       else self.api.candles(ident, period=interval))
+            seconds = interval * 60
+            now = int(self.clock())
+            try:
+                ideas = signals(candles, now, period=seconds)
+                valid_data = True
+                if not ideas and interval != 1:
+                    ideas = study_signals(candles, now, seconds)
+            except GuardError as exc:
+                if str(exc) not in fallback:
+                    raise
+                last_error = exc
+                continue
+            if ideas:
+                return candles, seconds, ideas
+        if valid_data:
+            return None, None, []
+        raise last_error or GuardError("insufficient_candles")
 
     @staticmethod
     def fee_for(rows, market):
@@ -145,17 +173,21 @@ class Worker:
             status = next(x for x in statuses if x["market"] == ident)
             try:
                 market = market_from_api(universe[ident], self.fee_for(fee_rows, ident))
-                candles = self.api.candles(ident)
-                book = self.api.book(ident)
-                self.mark(market, book)
-                choices = signals(candles, int(self.clock()))
+                candles, period, choices = self._market_signal(ident)
                 if not choices:
                     status["status"] = "sin señal explicable"
                     continue
+                book = self.api.book(ident)
+                self.mark(market, book)
                 signal_markets += 1
-                plan = entry_plan(market, book, choices[0], money(tickers[ident]["volume"]), self.policy, int(self.clock()))
-                candidates.append((choices[0].score, market, plan, candles))
-                status["status"] = "candidato " + choices[0].strategy + " (beneficio no garantizado)"
+                is_study = choices[0].strategy == "study_probe"
+                plan = entry_plan(market, book, choices[0], money(tickers[ident]["volume"]),
+                                  self.policy, int(self.clock()),
+                                  notional_cap="10" if is_study else None,
+                                  target_cap="0.20" if is_study else None)
+                candidates.append((choices[0].score, market, plan, candles, period))
+                status["status"] = ("candidato " + choices[0].strategy + " (" +
+                                    str(period // 60) + "m, beneficio no garantizado)")
             except GuardError as exc:
                 reason = str(exc)
                 # A missing or invalid individual market is not a reason to
@@ -177,8 +209,19 @@ class Worker:
             1 for o in s["orders"].values()
             if o["side"] == "buy" and local_day(o["created"]) == local_day(now)
         )
-        # Explain the decision without affecting whether an entry is allowed.
-        if not candidates:
+        # A training probe consumes a smaller fictitious notional and is
+        # limited to ONE attempt per local day, even if cancelled/unfilled.
+        study_today = sum(
+            1 for ident, order in s["orders"].items()
+            if order["side"] == "buy" and ident.endswith(":study_probe")
+            and local_day(order["created"]) == local_day(now)
+        )
+        executable = ([c for c in candidates if c[2]["strategy"] != "study_probe"]
+                      if study_today else candidates)
+        # Explain the decision without affecting existing hard risk limits.
+        if candidates and not executable:
+            diagnostic_decision = "study_daily_limit"
+        elif not candidates:
             diagnostic_decision = "no_qualified_opportunity"
         elif entries_today >= 3:
             diagnostic_decision = "daily_limit"
@@ -193,18 +236,27 @@ class Worker:
         else:
             diagnostic_decision = "other_safety_gate"
         try:
-            if (candidates and entries_today < 3 and not had_position_at_start
+            if (executable and entries_today < 3 and not had_position_at_start
                     and not s["position"] and not s["paused"] and not s["emergency"]
                     and not self.engine.kill_file.exists()):
-                _, market, _, candles = max(candidates, key=lambda x: (x[0], x[1].id))
+                _, market, selected_plan, candles, period = max(executable, key=lambda x: (x[0], x[1].id))
                 # Revalidate the winning market after the batch; never execute old depth.
                 stamp, volume = self.api.ticker(market.id)
                 book = self.api.book(market.id)
                 now = int(self.clock())
                 if not 0 <= now - stamp <= self.policy.max_age:
                     raise GuardError("stale_ticker")
-                choice = signals(candles, now)[0]
-                plan = entry_plan(market, book, choice, volume, self.policy, now)
+                confirmed = (study_signals(candles, now, period)
+                             if selected_plan["strategy"] == "study_probe"
+                             else signals(candles, now, period=period))
+                choice = next((v for v in confirmed
+                               if v.strategy == selected_plan["strategy"]), None)
+                if choice is None:
+                    raise GuardError("signal_expired")
+                is_study = choice.strategy == "study_probe"
+                plan = entry_plan(market, book, choice, volume, self.policy, now,
+                                  notional_cap="10" if is_study else None,
+                                  target_cap="0.20" if is_study else None)
                 ident = f"entry:{market.id}:{now//60}:{choice.strategy}"
                 # A decision for the same market/minute/strategy is one-shot even
                 # after a fill, cancel or restart. Do not reuse its ID with new
