@@ -67,6 +67,7 @@ class Worker:
                     "candle_gap_or_duplicate", "irregular_volume"}
         last_error = None
         valid_data = False
+        study_candidate = None
         for interval in (1, 5, 15):
             seconds = interval * 60
             try:
@@ -77,15 +78,21 @@ class Worker:
                 now = int(self.clock())
                 ideas = signals(candles, now, period=seconds)
                 valid_data = True
-                if not ideas and interval != 1:
-                    ideas = study_signals(candles, now, seconds)
+                if not ideas and interval != 1 and study_candidate is None:
+                    exploratory = study_signals(candles, now, seconds)
+                    if exploratory:
+                        study_candidate = (candles, seconds, exploratory)
             except GuardError as exc:
                 if str(exc) not in fallback:
                     raise
                 last_error = exc
                 continue
             if ideas:
+                # Any genuine trend/pullback outranks a study-only hypothesis,
+                # even if the study quota is exhausted on this calendar day.
                 return candles, seconds, ideas
+        if study_candidate is not None:
+            return study_candidate
         if valid_data:
             return None, None, []
         raise last_error or GuardError("insufficient_candles")
