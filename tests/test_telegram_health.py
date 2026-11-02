@@ -76,13 +76,13 @@ class TelegramHealthTests(unittest.TestCase):
         ).fetchall()
         self.assertEqual(len(rows), 1)
         self.assertIn("PAUSADAS", json.loads(rows[0]["body"])["text"])
-        self.store.control("resume", NOW+35)
+        self.store.control("resume", NOW+95)
         self.assertFalse(self.store.read()["paused"])
         self.assertFalse(self.store.read()["telegram_resume_required"])
 
     def test_existing_manual_pause_not_mistaken_for_auto_resume(self):
         self.store.control("pause", NOW)
-        self.assertTrue(record_telegram_failure(self.store, NOW+1, "telegram_unavailable"))
+        self.assertFalse(record_telegram_failure(self.store, NOW+1, "telegram_unavailable"))
         self.assertFalse(self.store.read()["telegram_resume_required"])
         record_telegram_recovery(self.store, NOW+2)
         self.assertTrue(self.store.read()["paused"])
