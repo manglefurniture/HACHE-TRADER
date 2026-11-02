@@ -4,6 +4,7 @@ from datetime import datetime
 from zoneinfo import ZoneInfo
 from .domain import money
 from .store import local_day
+from .scan_diagnostics import render_diagnostics
 
 
 def report(store, now, period="all"):
@@ -112,6 +113,9 @@ def render(store, action, now, policy, *, runtime_mode="paper"):
             symbol = ident[:-4].upper() + "/USDT" if ident.endswith("usdt") else ident.upper()
             rows.append(f"{symbol}: {_market_message(entry['status'])}")
         return prefix + header + "\n".join(rows)
+    if action == "diagnostico":
+        return (render_diagnostics(store, now) if runtime_mode == "trial"
+                else prefix + "Diagnóstico disponible únicamente en simulación.")
     if action == "historial":
         orders = list(store.read()["orders"].items())[-10:]
         return prefix + "\n".join(f"{key}: {o['side']} {o['market']} · {o['status']} · ejecutado {o['filled']}" for key, o in orders)

@@ -29,6 +29,14 @@ class Store:
           CREATE TABLE IF NOT EXISTS updates(id INTEGER PRIMARY KEY);
           CREATE TABLE IF NOT EXISTS outbox(id TEXT PRIMARY KEY, body TEXT NOT NULL, sent INTEGER NOT NULL DEFAULT 0);
           CREATE TABLE IF NOT EXISTS confirmations(nonce TEXT PRIMARY KEY, expires INTEGER NOT NULL, message_id INTEGER, used INTEGER NOT NULL DEFAULT 0);
+          CREATE TABLE IF NOT EXISTS scan_diagnostics(
+            id INTEGER PRIMARY KEY, at INTEGER NOT NULL, day TEXT NOT NULL,
+            universe INTEGER NOT NULL, eligible INTEGER NOT NULL,
+            checked INTEGER NOT NULL, signal_markets INTEGER NOT NULL,
+            qualified INTEGER NOT NULL, reasons TEXT NOT NULL, decision TEXT NOT NULL
+          );
+          CREATE INDEX IF NOT EXISTS scan_diagnostics_day
+            ON scan_diagnostics(day, id);
         """)
         with self.transaction():
             if not self.db.execute("SELECT 1 FROM state").fetchone():
