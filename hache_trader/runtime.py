@@ -68,12 +68,13 @@ class Worker:
         last_error = None
         valid_data = False
         for interval in (1, 5, 15):
-            # Preserve compatibility with the existing one-minute provider.
-            candles = (self.api.candles(ident) if interval == 1
-                       else self.api.candles(ident, period=interval))
             seconds = interval * 60
-            now = int(self.clock())
             try:
+                # Provider may reject or omit sparse intervals as well as the
+                # validator. Both recover only for allowlisted data gaps.
+                candles = (self.api.candles(ident) if interval == 1
+                           else self.api.candles(ident, period=interval))
+                now = int(self.clock())
                 ideas = signals(candles, now, period=seconds)
                 valid_data = True
                 if not ideas and interval != 1:
