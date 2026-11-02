@@ -75,6 +75,9 @@ def render(store, action, now, policy, *, runtime_mode="paper"):
         if runtime_mode == "trial":
             if state.get("telegram_connection") == "unavailable":
                 telegram_health = "Telegram: conexión interrumpida (entradas bloqueadas)\n"
+            elif state.get("telegram_connection") == "degraded":
+                telegram_health = ("Telegram: conexión intermitente (máximo 90 s de tolerancia; "
+                                   "se pausarán entradas si persiste)\n")
             elif state.get("telegram_resume_required"):
                 telegram_health = "Telegram: conexión recuperada; requiere /reanudar\n"
             else:
