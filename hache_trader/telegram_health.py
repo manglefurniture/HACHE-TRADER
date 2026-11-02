@@ -12,6 +12,9 @@ _TELEGRAM_FAILURES = frozenset((
 ))
 
 
+_TRANSIENT_CODES = frozenset(("telegram_unavailable", "telegram_cooldown"))
+GRACE_SECONDS = 90
+
 def record_telegram_failure(store, now, reason):
     """Pause on sustained transient failures or immediately on critical errors."""
     code = reason if reason in _TELEGRAM_FAILURES else "telegram_control_error"
@@ -19,9 +22,21 @@ def record_telegram_failure(store, now, reason):
         state = store.read()
         if state.get("telegram_connection") == "unavailable" and state["paused"]:
             return False
+        # Only temporary network failures have a bounded grace period.
+        # Invalid API data / unexpected control errors fail closed immediately.
+        if code in _TRANSIENT_CODES:
+            if state.get("telegram_connection") != "degraded":
+                state["telegram_connection"] = "degraded"
+                state["telegram_failure_since"] = now
+                store.save(state, "telegram_transient_failure", {"category": code}, now)
+                return False
+            since = state.get("telegram_failure_since")
+            if type(since) is int and 0 <= now - since < GRACE_SECONDS:
+                return False
         was_running = not state["paused"]
         state["paused"] = True
         state["telegram_connection"] = "unavailable"
+        state["telegram_failure_since"] = None
         state["telegram_resume_required"] = (
             bool(state.get("telegram_resume_required")) or was_running
         )
