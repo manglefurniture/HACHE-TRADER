@@ -83,7 +83,7 @@ def render(store, action, now, policy, *, runtime_mode="paper"):
                 phase = str(last.get("phase", ""))[:36]
                 reason = str(last.get("reason", ""))[:48]
                 worker_failure = (
-                    f"Último fallo del motor: {when} · {phase} / {reason}\\n"
+                    f"Último fallo del motor: {when} · {phase} / {reason}\n"
                 )
             if state.get("telegram_connection") == "unavailable":
                 telegram_health = "Telegram: conexión interrumpida (entradas bloqueadas)\n"
