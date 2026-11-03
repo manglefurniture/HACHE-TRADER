@@ -44,9 +44,10 @@ class WorkerFailureDiagnosticsTests(unittest.TestCase):
         self.assertTrue(self.store.read()["paused"])
         self.api.fail = True
         self.api.now += 60
+        failure_at = self.api.now
         self.assertFalse(self.worker.cycle())
         self.assertEqual(self.error_notifications(), 1)
-        self.assertEqual(self.store.read()["worker_last_failure"]["at"], NOW + 60)
+        self.assertEqual(self.store.read()["worker_last_failure"]["at"], failure_at)
         self.assertIn("Último fallo del motor", render(
             self.store, "estado", self.api.now, self.policy, runtime_mode="trial"
         ))
