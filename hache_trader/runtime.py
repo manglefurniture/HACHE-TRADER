@@ -1,6 +1,7 @@
 """Continuous multi-market paper worker. Market errors stop new entries."""
 import json
 import os
+import re
 import sqlite3
 from pathlib import Path
 import time
@@ -11,6 +12,40 @@ from .safetrade import market_from_api
 from .strategy import signals, study_signals, entry_plan
 from .store import local_day
 from .scan_diagnostics import append_scan
+
+
+# Never copy provider exception bodies, URLs, credentials or arbitrary text
+# into the ledger, reports or Telegram notifications.
+_WORKER_ERROR_CODES = frozenset((
+    "circuit_open", "safetrade_transport_or_schema_error",
+    "stale_http_response", "markets_schema_unverified",
+    "tickers_schema_invalid", "fee_schema_invalid",
+    "fee_pagination_incomplete", "held_market_unavailable",
+    "depth_schema_unverified", "ticker_schema_unverified",
+    "stale_ticker", "stale_worker", "signal_expired",
+    "risk_plan_understates_loss", "daily_loss_budget_exhausted",
+    "exposure_or_cash_exceeded", "paper_daily_entry_limit",
+    "entries_blocked", "order_exceeds_capital",
+    "response_too_large", "invalid_response",
+    "invalid_decimal", "invalid_decimal_type",
+    "decimal_out_of_bounds", "book_has_no_depth",
+))
+_WORKER_ALERT_INTERVAL = 30 * 60
+
+
+def _safe_worker_error(exc):
+    if isinstance(exc, GuardError):
+        code = str(exc)
+        if code in _WORKER_ERROR_CODES or re.fullmatch(r"safetrade_http_[45][0-9]{2}", code):
+            return code
+        return "market_guard_rejected"
+    if isinstance(exc, KeyError):
+        return "missing_public_field"
+    if isinstance(exc, TypeError):
+        return "invalid_public_field_type"
+    if isinstance(exc, ArithmeticError):
+        return "invalid_market_arithmetic"
+    return "public_transport_unavailable"
 
 
 class ProcessLock:
@@ -49,6 +84,7 @@ class Worker:
         self.store, self.policy, self.api, self.clock = store, policy, api, clock
         self.engine = PaperEngine(store, policy, kill_file)
         self.offset = 0
+        self.phase = "starting"
 
     def fees(self):
         rows = []
@@ -125,23 +161,40 @@ class Worker:
     def cycle(self):
         try:
             return self._cycle()
-        except (GuardError, KeyError, TypeError, OSError, ArithmeticError):
+        except (GuardError, KeyError, TypeError, OSError, ArithmeticError) as exc:
             now = int(self.clock())
+            category = _safe_worker_error(exc)
             with self.store.transaction():
                 s = self.store.read()
-                changed = s["last_error"] != "market_or_execution_unavailable"
+                last_alert = s.get("worker_last_alert_at")
+                notify = (type(last_alert) is not int
+                          or now < last_alert
+                          or now - last_alert >= _WORKER_ALERT_INTERVAL)
                 s["last_error"], s["paused"] = "market_or_execution_unavailable", True
-                self.store.save(s, "worker_failed_closed", {}, now)
-                if changed:
-                    self.store.enqueue("error:"+str(now), {"text": "SIMULACIÓN · Datos o ejecución no verificables. Entradas pausadas; las posiciones no se consideran cerradas."})
+                s["worker_last_failure"] = {
+                    "at": now, "phase": self.phase, "reason": category,
+                }
+                if notify:
+                    s["worker_last_alert_at"] = now
+                self.store.save(s, "worker_failed_closed",
+                                {"phase": self.phase, "reason": category}, now)
+                if notify:
+                    self.store.enqueue("error:" + str(now), {
+                        "text": "SIMULACIÓN · Datos o ejecución no verificables. "
+                                "Entradas pausadas; las posiciones no se consideran cerradas. "
+                                "Consulta /estado para conocer la causa segura."
+                    })
             return False
 
     def _cycle(self):
         now = int(self.clock())
+        self.phase = "pending_orders"
         for ident, order in self.store.read()["orders"].items():
             if order["status"] in ("open", "partial"):
                 self.engine.cancel(ident, now)
+        self.phase = "public_fees"
         fee_rows = self.fees()
+        self.phase = "market_catalog"
         rows = self.api.markets()
         universe = {r["id"]: r for r in rows if r.get("quote_unit") == "usdt" and r.get("state") == "enabled"}
         held = self.store.read()["position"]
@@ -149,6 +202,7 @@ class Worker:
         # This prevents immediate churn when a stop/target is hit.
         had_position_at_start = held is not None
         if held:
+            self.phase = "open_position_exit"
             if held["market"] not in universe:
                 raise GuardError("held_market_unavailable")
             market = market_from_api(universe[held["market"]], self.fee_for(fee_rows, held["market"]))
@@ -161,6 +215,7 @@ class Worker:
                 # after the position is fully closed.
                 with self.store.transaction():
                     self.store.enqueue(exit_id, {"text": "SIMULACIÓN · Salida evaluada con posición restante. Consulta /posiciones para el remanente ficticio."})
+        self.phase = "public_tickers"
         tickers = self.api.get("/trade/public/tickers")
         if not isinstance(tickers, dict):
             raise GuardError("tickers_schema_invalid")
@@ -177,6 +232,7 @@ class Worker:
         # Rotate bounded batches so a large universe cannot starve exit/Telegram checks.
         batch = [eligible[(self.offset+i) % len(eligible)] for i in range(min(5, len(eligible)))] if eligible else []
         self.offset = (self.offset + len(batch)) % max(1, len(eligible))
+        self.phase = "candidate_scan"
         for ident in batch:
             status = next(x for x in statuses if x["market"] == ident)
             try:
@@ -207,6 +263,7 @@ class Worker:
                                   reason != "safetrade_http_404"):
                     raise
                 status["status"] = "descartado: " + reason
+        self.phase = "scan_commit"
         now = int(self.clock())
         with self.store.transaction():
             s = self.store.read()
@@ -243,6 +300,7 @@ class Worker:
             diagnostic_decision = "stop_file"
         else:
             diagnostic_decision = "other_safety_gate"
+        self.phase = "entry_validation"
         try:
             if (executable and entries_today < 3 and not had_position_at_start
                     and not s["position"] and not s["paused"] and not s["emergency"]
@@ -270,6 +328,7 @@ class Worker:
                 # after a fill, cancel or restart. Do not reuse its ID with new
                 # price/quantity terms or execute the historical order again.
                 if ident not in self.store.read()["orders"]:
+                    self.phase = "paper_execution"
                     self.engine.submit(ident, market, "buy", plan["quantity"], plan["price"], now,
                                        stop=plan["stop"], target=plan["target"], expected_loss=plan["expected_loss"])
                     execution_book = self.api.book(market.id)
@@ -297,9 +356,11 @@ class Worker:
             self._save_diagnostic(statuses, eligible, batch, signal_markets,
                                   candidates, diagnostic_decision)
             raise
+        self.phase = "daily_reporting"
         with self.store.transaction():
             day = local_day(now)
             self.store.enqueue("daily:"+day, {"text": "SIMULACIÓN · Informe diario\n" + json.dumps(report(self.store, now, "day"), ensure_ascii=False)[:3000]})
         self._save_diagnostic(statuses, eligible, batch, signal_markets,
                               candidates, diagnostic_decision)
+        self.phase = "complete"
         return True

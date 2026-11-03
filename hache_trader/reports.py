@@ -74,6 +74,17 @@ def render(store, action, now, policy, *, runtime_mode="paper"):
                     + f"Error: {r['last_error'] or 'ninguno'}\n"
                     + f"Posiciones abiertas: {'sí' if r['position'] else 'no'}")
         if runtime_mode == "trial":
+            last = state.get("worker_last_failure")
+            worker_failure = ""
+            if isinstance(last, dict) and type(last.get("at")) is int:
+                when = datetime.fromtimestamp(
+                    last["at"], ZoneInfo("America/Cancun")
+                ).strftime("%d/%m %H:%M")
+                phase = str(last.get("phase", ""))[:36]
+                reason = str(last.get("reason", ""))[:48]
+                worker_failure = (
+                    f"Último fallo del motor: {when} · {phase} / {reason}\n"
+                )
             if state.get("telegram_connection") == "unavailable":
                 telegram_health = "Telegram: conexión interrumpida (entradas bloqueadas)\n"
             elif state.get("telegram_connection") == "degraded":
@@ -94,6 +105,7 @@ def render(store, action, now, policy, *, runtime_mode="paper"):
                     + f"Cierres: {r['closed_trades']} · Neto simulado: {r['realized']} USDT\n"
                     + f"Último ciclo: {timestamp}\n" + telegram_health
                     + f"Error del mercado: {r['last_error'] or 'ninguno'}\n"
+                    + worker_failure
                     + "Comisiones estimadas; sin órdenes reales.")
         return prefix + f"Pausado: {r['paused']} · Emergencia: {r['emergency']}\nConciliado: {r['reconciled']}\nÚltimo ciclo: {timestamp}\nError: {r['last_error'] or 'ninguno'}\nOperaciones cerradas: {r['closed_trades']}"
     if action in ("saldo", "ganancias", "diario", "semanal"):
